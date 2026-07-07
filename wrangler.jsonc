@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "webapp",
+  "name": "adops-os",
   "compatibility_date": "2026-04-26",
   "pages_build_output_dir": "./dist",
   "compatibility_flags": [
@@ -11,7 +11,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "adops-os-production",
+      "database_name": "adops-os-db",
       "database_id": "3a02bd00-7644-4046-9f80-d61fc9813ead"
     }
   ]
