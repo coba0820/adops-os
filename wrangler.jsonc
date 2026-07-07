@@ -5,6 +5,15 @@
   "pages_build_output_dir": "./dist",
   "compatibility_flags": [
     "nodejs_compat"
+  ],
+  // AdOps OS: D1データベース（媒体/サイト/キャンペーンマスタ、アップロード履歴を格納）
+  // database_id は本番デプロイ前に `wrangler d1 create adops-os-production` で取得し置き換える
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "adops-os-production",
+      "database_id": "local-dev-placeholder"
+    }
   ]
   // "vars": {
   //   "MY_VAR": "my-variable"
@@ -19,13 +28,6 @@
   //   {
   //     "binding": "MY_BUCKET",
   //     "bucket_name": "my-bucket"
-  //   }
-  // ],
-  // "d1_databases": [
-  //   {
-  //     "binding": "MY_DB",
-  //     "database_name": "my-database",
-  //     "database_id": ""
   //   }
   // ],
   // "ai": {
