@@ -7,7 +7,7 @@
     "nodejs_compat"
   ],
   // AdOps OS: D1データベース（媒体/サイト/キャンペーンマスタ、アップロード履歴を格納）
-  // database_id は本番デプロイ前に `wrangler d1 create adops-os-production` で取得し置き換える
+  // database_id は `wrangler d1 create adops-os-db` で取得済み（本番D1と紐付け済み）
   "d1_databases": [
     {
       "binding": "DB",
