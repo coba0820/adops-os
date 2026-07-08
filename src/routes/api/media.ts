@@ -7,6 +7,23 @@ import type { Bindings, MediaMaster, ApiResponse } from '../../types'
 
 export const mediaRoute = new Hono<{ Bindings: Bindings }>()
 
+const SUPPORTED_MEDIA_STATUSES = ['active', 'paused'] as const
+type SupportedMediaStatus = (typeof SUPPORTED_MEDIA_STATUSES)[number]
+
+function hasStatusField(body: { status?: unknown }) {
+  return Object.prototype.hasOwnProperty.call(body, 'status')
+}
+
+function parseMediaStatus(status: unknown): SupportedMediaStatus | null {
+  if (
+    typeof status === 'string' &&
+    SUPPORTED_MEDIA_STATUSES.includes(status as SupportedMediaStatus)
+  ) {
+    return status as SupportedMediaStatus
+  }
+  return null
+}
+
 // ------------------------------------------------------------
 // 一覧取得: GET /api/media
 // ------------------------------------------------------------
@@ -20,10 +37,11 @@ mediaRoute.get('/', async (c) => {
 
 // ------------------------------------------------------------
 // 新規追加: POST /api/media
-// body: { media_name: string }
+// body: { media_name: string, status?: 'active' | 'paused' }
+// status未指定時は既存API互換のため active として登録する。
 // ------------------------------------------------------------
 mediaRoute.post('/', async (c) => {
-  const body = await c.req.json<{ media_name: string }>()
+  const body = await c.req.json<{ media_name: string; status?: string }>()
 
   if (!body.media_name || body.media_name.trim() === '') {
     return c.json<ApiResponse<null>>(
@@ -32,10 +50,18 @@ mediaRoute.post('/', async (c) => {
     )
   }
 
+  const status = hasStatusField(body) ? parseMediaStatus(body.status) : 'active'
+  if (!status) {
+    return c.json<ApiResponse<null>>(
+      { success: false, error: '媒体の状態は active または paused を指定してください' },
+      400
+    )
+  }
+
   const result = await c.env.DB.prepare(
-    'INSERT INTO media_master (media_name) VALUES (?)'
+    'INSERT INTO media_master (media_name, status) VALUES (?, ?)'
   )
-    .bind(body.media_name.trim())
+    .bind(body.media_name.trim(), status)
     .run()
 
   return c.json<ApiResponse<{ id: number | null }>>({
@@ -46,11 +72,12 @@ mediaRoute.post('/', async (c) => {
 
 // ------------------------------------------------------------
 // 更新: PUT /api/media/:id
-// body: { media_name: string }
+// body: { media_name: string, status?: 'active' | 'paused' }
+// status未指定時は既存API互換のため現在の状態を維持する。
 // ------------------------------------------------------------
 mediaRoute.put('/:id', async (c) => {
   const id = c.req.param('id')
-  const body = await c.req.json<{ media_name: string }>()
+  const body = await c.req.json<{ media_name: string; status?: string }>()
 
   if (!body.media_name || body.media_name.trim() === '') {
     return c.json<ApiResponse<null>>(
@@ -59,11 +86,27 @@ mediaRoute.put('/:id', async (c) => {
     )
   }
 
-  await c.env.DB.prepare(
-    'UPDATE media_master SET media_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-  )
-    .bind(body.media_name.trim(), id)
-    .run()
+  if (hasStatusField(body)) {
+    const status = parseMediaStatus(body.status)
+    if (!status) {
+      return c.json<ApiResponse<null>>(
+        { success: false, error: '媒体の状態は active または paused を指定してください' },
+        400
+      )
+    }
+
+    await c.env.DB.prepare(
+      'UPDATE media_master SET media_name = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+    )
+      .bind(body.media_name.trim(), status, id)
+      .run()
+  } else {
+    await c.env.DB.prepare(
+      'UPDATE media_master SET media_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+    )
+      .bind(body.media_name.trim(), id)
+      .run()
+  }
 
   return c.json<ApiResponse<null>>({ success: true })
 })

@@ -15,9 +15,12 @@ export type Bindings = {
 /**
  * 媒体マスタ（media_master）
  */
+export type MediaStatus = 'active' | 'paused' | 'archived'
+
 export interface MediaMaster {
   id: number
   media_name: string
+  status: MediaStatus
   created_at: string
   updated_at: string
 }

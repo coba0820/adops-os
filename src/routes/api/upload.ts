@@ -24,6 +24,8 @@ uploadRoute.get('/', async (c) => {
 // ------------------------------------------------------------
 // 履歴記録: POST /api/upload
 // body: { file_type, media_id?, file_name, row_count }
+// v1.1以降のCSV取込率では、media_master.status = 'active' の媒体のみを
+// 取込対象として扱う（paused、および将来追加予定の archived は対象外）。
 // ------------------------------------------------------------
 uploadRoute.post('/', async (c) => {
   const body = await c.req.json<{

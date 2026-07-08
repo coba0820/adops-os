@@ -23,6 +23,8 @@ export async function renderDataImportPage(container) {
   let mediaList = []
   try {
     const res = await axios.get('/api/media')
+    // TODO(v1.1): CSV取込率の対象媒体は status === 'active' のみとする。
+    // ここでは既存挙動維持のため、媒体一覧の絞り込みはまだ行わない。
     mediaList = res.data.data || []
   } catch (err) {
     console.error(err)

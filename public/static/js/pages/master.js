@@ -14,6 +14,12 @@ const SUB_TABS = [
   { key: 'campaign', label: 'キャンペーンマスタ' },
 ]
 
+const MEDIA_STATUS_VIEW = {
+  active: { label: '🟢 稼働中', badgeClass: 'badge-active' },
+  paused: { label: '🟡 停止', badgeClass: 'badge-paused' },
+  archived: { label: 'アーカイブ', badgeClass: 'badge-inactive' },
+}
+
 let activeSubTab = 'media'
 
 /**
@@ -75,16 +81,28 @@ async function renderMediaMaster(root) {
   bindMediaRowEvents(root, list)
 }
 
+function normalizeMediaStatus(status) {
+  return MEDIA_STATUS_VIEW[status] ? status : 'active'
+}
+
+function renderMediaStatusBadge(status) {
+  const view = MEDIA_STATUS_VIEW[status] || MEDIA_STATUS_VIEW.active
+  return `<span class="badge ${view.badgeClass}">${view.label}</span>`
+}
+
 function renderMediaTable(list) {
   if (list.length === 0) {
     return `<div class="empty-state">媒体が登録されていません</div>`
   }
   const rows = list
     .map(
-      (m) => `
-      <tr>
+      (m) => {
+        const status = normalizeMediaStatus(m.status)
+        return `
+      <tr class="${status === 'paused' ? 'media-row-paused' : ''}">
         <td>${m.id}</td>
         <td>${escapeHtml(m.media_name)}</td>
+        <td>${renderMediaStatusBadge(status)}</td>
         <td>
           <div class="action-btn-group">
             <button class="icon-btn" data-action="edit" data-id="${m.id}" title="編集"><i class="fa-solid fa-pen"></i></button>
@@ -92,14 +110,14 @@ function renderMediaTable(list) {
           </div>
         </td>
       </tr>
-    `
+    `}
     )
     .join('')
 
   return `
     <div class="table-scroll">
       <table class="data-table">
-        <thead><tr><th>媒体ID</th><th>媒体名</th><th style="width:100px">操作</th></tr></thead>
+        <thead><tr><th>媒体ID</th><th>媒体名</th><th>状態</th><th style="width:100px">操作</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -129,6 +147,7 @@ function bindMediaRowEvents(root, list) {
 
 function openMediaModal(root, item) {
   const isEdit = !!item
+  const currentStatus = normalizeMediaStatus(item?.status)
   showModal({
     title: isEdit ? '媒体を編集' : '媒体を追加',
     bodyHtml: `
@@ -136,16 +155,24 @@ function openMediaModal(root, item) {
         <label class="form-label">媒体名</label>
         <input type="text" id="modal-media-name" class="form-input" value="${isEdit ? escapeHtml(item.media_name) : ''}" placeholder="例: Google広告" />
       </div>
+      <div class="form-row">
+        <label class="form-label">状態</label>
+        <select id="modal-media-status" class="form-select">
+          <option value="active" ${currentStatus === 'active' ? 'selected' : ''}>active</option>
+          <option value="paused" ${currentStatus === 'paused' ? 'selected' : ''}>paused</option>
+        </select>
+      </div>
     `,
     onConfirm: async () => {
       const name = document.getElementById('modal-media-name').value.trim()
+      const status = document.getElementById('modal-media-status').value
       if (!name) {
         showToast('媒体名を入力してください', 'error')
         return
       }
       const res = isEdit
-        ? await axios.put(`/api/media/${item.id}`, { media_name: name }).then((r) => r.data).catch((e) => e.response.data)
-        : await axios.post('/api/media', { media_name: name }).then((r) => r.data).catch((e) => e.response.data)
+        ? await axios.put(`/api/media/${item.id}`, { media_name: name, status }).then((r) => r.data).catch((e) => e.response.data)
+        : await axios.post('/api/media', { media_name: name, status }).then((r) => r.data).catch((e) => e.response.data)
 
       if (res.success) {
         closeModal()
