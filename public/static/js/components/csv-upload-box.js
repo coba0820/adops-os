@@ -3,7 +3,7 @@
 // データ取込画面の3種類（広告媒体CSV / 媒体集計CSV / 決済レポートCSV）
 // で共通利用するUIブロック。
 // v1では「アップロード＋プレビュー表示」のみが目的で、
-// 保存・分析・結合は行わない（履歴だけAPIに記録する）。
+// 広告媒体CSVは日次実績も保存し、それ以外は履歴だけAPIに記録する。
 // ============================================================
 import { parseCsv } from './csv-parser.js'
 import { showToast } from './toast.js'
@@ -119,15 +119,20 @@ export function mountCsvUploadBox(rootEl, options) {
 
       const rowCount = rows.length
 
-      // アップロード履歴をAPIに記録（実データは保存しない）
+      // アップロード履歴をAPIに記録し、広告媒体CSVは実績行も保存する
       try {
         await axios.post('/api/upload', {
           file_type: fileType,
           media_id: showMediaSelect && mediaSelect ? Number(mediaSelect.value) : null,
           file_name: file.name,
           row_count: rowCount,
+          csv_rows: fileType === 'ad_media_csv' ? rows : undefined,
         })
-        showToast(`「${file.name}」を取込みました（${rowCount}行）`, 'success')
+        if (fileType === 'ad_media_csv') {
+          showToast('広告媒体CSVの実績を保存しました', 'success')
+        } else {
+          showToast(`「${file.name}」を取込みました（${rowCount}行）`, 'success')
+        }
         onUploadSuccess({
           file_type: fileType,
           file_name: file.name,

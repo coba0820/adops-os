@@ -29,6 +29,10 @@ const COMMON_REQUIRED_FILE_TYPES: UploadFileType[] = [
   'payment_report_csv',
 ]
 
+const AD_MEDIA_DAILY_INSERT_BATCH_SIZE = 100
+
+type CsvRows = string[][]
+
 function parseUploadFileType(fileType: unknown): UploadFileType | null {
   if (
     fileType === 'ad_media_csv' ||
@@ -40,10 +44,120 @@ function parseUploadFileType(fileType: unknown): UploadFileType | null {
   return null
 }
 
+function normalizeHeader(header: unknown) {
+  return String(header ?? '')
+    .replace(/^\uFEFF/, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+}
+
+function buildHeaderIndex(headerRow: string[]) {
+  const index = new Map<string, number>()
+  headerRow.forEach((header, i) => {
+    index.set(normalizeHeader(header), i)
+  })
+  return index
+}
+
+function getCell(row: string[], headerIndex: Map<string, number>, header: string) {
+  const index = headerIndex.get(normalizeHeader(header))
+  if (index === undefined) return ''
+  return String(row[index] ?? '').trim()
+}
+
 function normalizeRowCount(rowCount: unknown) {
   const value = Number(rowCount)
   if (!Number.isFinite(value) || value < 0) return 0
   return Math.floor(value)
+}
+
+function parseInteger(value: unknown) {
+  const normalized = String(value ?? '').replace(/[,\s]/g, '')
+  if (normalized === '') return 0
+  const number = Number(normalized)
+  if (!Number.isFinite(number)) return 0
+  return Math.trunc(number)
+}
+
+function parseMoney(value: unknown) {
+  const normalized = String(value ?? '').replace(/[,\s¥￥$]/g, '')
+  if (normalized === '') return 0
+  const number = Number(normalized)
+  return Number.isFinite(number) ? number : 0
+}
+
+function parseTargetDate(value: unknown) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+
+  const ymd = raw.match(/^(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?$/)
+  if (ymd) {
+    const [, year, month, day] = ymd
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+  }
+
+  const mdy = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/)
+  if (mdy) {
+    const [, month, day, year] = mdy
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+  }
+
+  const date = new Date(raw)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toISOString().slice(0, 10)
+}
+
+function isBlankRow(row: string[]) {
+  return row.every((cell) => String(cell ?? '').trim() === '')
+}
+
+function buildAdMediaDailyRows(rows: CsvRows, mediaId: number, uploadHistoryId: number) {
+  const [headerRow, ...bodyRows] = rows
+  if (!headerRow || headerRow.length === 0) {
+    throw new Error('CSVヘッダー行が見つかりません')
+  }
+
+  const headerIndex = buildHeaderIndex(headerRow)
+  const requiredHeaders = [
+    'Date',
+    'Account Name',
+    'Account ID',
+    'Campaign Name',
+    'Campaign ID',
+    'Clicks',
+    'Served Ads',
+    'Impressions',
+    'Spent',
+  ]
+  const missingHeaders = requiredHeaders.filter(
+    (header) => !headerIndex.has(normalizeHeader(header))
+  )
+
+  if (missingHeaders.length > 0) {
+    throw new Error(`CSVに必要な列がありません: ${missingHeaders.join(', ')}`)
+  }
+
+  return bodyRows.filter((row) => !isBlankRow(row)).map((row, index) => {
+    const targetDate = parseTargetDate(getCell(row, headerIndex, 'Date'))
+    if (!targetDate) {
+      throw new Error(`${index + 2}行目のDateが正しくありません`)
+    }
+
+    return {
+      targetDate,
+      mediaId,
+      accountName: getCell(row, headerIndex, 'Account Name'),
+      accountId: getCell(row, headerIndex, 'Account ID'),
+      campaignName: getCell(row, headerIndex, 'Campaign Name'),
+      campaignId: getCell(row, headerIndex, 'Campaign ID'),
+      clicks: parseInteger(getCell(row, headerIndex, 'Clicks')),
+      servedAds: parseInteger(getCell(row, headerIndex, 'Served Ads')),
+      impressions: parseInteger(getCell(row, headerIndex, 'Impressions')),
+      spend: parseMoney(getCell(row, headerIndex, 'Spent')),
+      uploadHistoryId,
+    }
+  })
 }
 
 // ------------------------------------------------------------
@@ -175,6 +289,7 @@ uploadRoute.post('/', async (c) => {
     media_id?: number | null
     file_name: string
     row_count: number
+    csv_rows?: CsvRows
   }>()
 
   const fileType = parseUploadFileType(body.file_type)
@@ -227,8 +342,69 @@ uploadRoute.post('/', async (c) => {
     )
     .run()
 
+  const uploadHistoryId = result.meta.last_row_id ?? null
+
+  if (fileType === 'ad_media_csv') {
+    if (!uploadHistoryId) {
+      return c.json<ApiResponse<null>>(
+        { success: false, error: 'アップロード履歴IDを取得できませんでした' },
+        500
+      )
+    }
+
+    if (!Array.isArray(body.csv_rows)) {
+      return c.json<ApiResponse<null>>(
+        { success: false, error: '広告媒体CSVの行データが送信されていません' },
+        400
+      )
+    }
+
+    try {
+      const dailyRows = buildAdMediaDailyRows(
+        body.csv_rows,
+        mediaId,
+        uploadHistoryId
+      )
+
+      if (dailyRows.length > 0) {
+        for (let i = 0; i < dailyRows.length; i += AD_MEDIA_DAILY_INSERT_BATCH_SIZE) {
+          const chunk = dailyRows.slice(i, i + AD_MEDIA_DAILY_INSERT_BATCH_SIZE)
+          await c.env.DB.batch(
+            chunk.map((row) =>
+              c.env.DB.prepare(
+                `INSERT INTO ad_media_daily
+                   (target_date, media_id, account_name, account_id,
+                    campaign_name, campaign_id, clicks, served_ads,
+                    impressions, spend, upload_history_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              ).bind(
+                row.targetDate,
+                row.mediaId,
+                row.accountName,
+                row.accountId,
+                row.campaignName,
+                row.campaignId,
+                row.clicks,
+                row.servedAds,
+                row.impressions,
+                row.spend,
+                row.uploadHistoryId
+              )
+            )
+          )
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '広告媒体CSVの実績保存に失敗しました'
+      return c.json<ApiResponse<null>>(
+        { success: false, error: message },
+        400
+      )
+    }
+  }
+
   return c.json<ApiResponse<{ id: number | null }>>({
     success: true,
-    data: { id: result.meta.last_row_id ?? null },
+    data: { id: uploadHistoryId },
   })
 })
