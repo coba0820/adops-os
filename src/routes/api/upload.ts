@@ -33,6 +33,60 @@ const AD_MEDIA_DAILY_INSERT_BATCH_SIZE = 100
 
 type CsvRows = string[][]
 
+function parseCsvText(text: string): CsvRows {
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const lines = normalized.split('\n').filter((line) => line.trim() !== '')
+  return lines.map((line) => parseCsvLine(line))
+}
+
+function parseCsvLine(line: string) {
+  const result: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i]
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (line[i + 1] === '"') {
+          current += '"'
+          i++
+        } else {
+          inQuotes = false
+        }
+      } else {
+        current += char
+      }
+    } else if (char === '"') {
+      inQuotes = true
+    } else if (char === ',') {
+      result.push(current)
+      current = ''
+    } else {
+      current += char
+    }
+  }
+
+  result.push(current)
+  return result.map((value) => value.trim())
+}
+
+function normalizeCsvRows(csvRows: unknown, csvText: unknown): CsvRows {
+  if (
+    Array.isArray(csvRows) &&
+    csvRows.every((row) => Array.isArray(row))
+  ) {
+    return csvRows.map((row) => row.map((cell) => String(cell ?? '')))
+  }
+
+  if (typeof csvText === 'string' && csvText.trim() !== '') {
+    return parseCsvText(csvText)
+  }
+
+  return []
+}
+
 function parseUploadFileType(fileType: unknown): UploadFileType | null {
   if (
     fileType === 'ad_media_csv' ||
@@ -70,6 +124,35 @@ function normalizeRowCount(rowCount: unknown) {
   const value = Number(rowCount)
   if (!Number.isFinite(value) || value < 0) return 0
   return Math.floor(value)
+}
+
+async function resolveUploadHistoryId(
+  db: D1Database,
+  result: D1Result,
+  fileType: UploadFileType,
+  mediaId: number | null,
+  fileName: string,
+  rowCount: number
+) {
+  const metaId = Number(result.meta.last_row_id)
+  if (Number.isInteger(metaId) && metaId > 0) return metaId
+
+  const latest = await db.prepare(
+    `SELECT id
+     FROM upload_history
+     WHERE file_type = ?
+       AND media_id IS ?
+       AND file_name = ?
+       AND row_count = ?
+       AND target_date = date('now', '+9 hours')
+       AND status = 'success'
+     ORDER BY id DESC
+     LIMIT 1`
+  )
+    .bind(fileType, mediaId, fileName, rowCount)
+    .first<{ id: number }>()
+
+  return latest?.id ?? null
 }
 
 function parseInteger(value: unknown) {
@@ -290,10 +373,12 @@ uploadRoute.post('/', async (c) => {
     file_name: string
     row_count: number
     csv_rows?: CsvRows
+    csv_text?: string
   }>()
 
   const fileType = parseUploadFileType(body.file_type)
   const fileName = typeof body.file_name === 'string' ? body.file_name.trim() : ''
+  const rowCount = normalizeRowCount(body.row_count)
 
   if (!fileType || !fileName) {
     return c.json<ApiResponse<null>>(
@@ -329,6 +414,18 @@ uploadRoute.post('/', async (c) => {
     mediaId = requestedMediaId
   }
 
+  const adMediaCsvRows =
+    fileType === 'ad_media_csv'
+      ? normalizeCsvRows(body.csv_rows, body.csv_text)
+      : []
+
+  if (fileType === 'ad_media_csv' && adMediaCsvRows.length === 0) {
+    return c.json<ApiResponse<null>>(
+      { success: false, error: '広告媒体CSVの行データが送信されていません' },
+      400
+    )
+  }
+
   const result = await c.env.DB.prepare(
     `INSERT INTO upload_history
        (file_type, media_id, file_name, row_count, target_date, status)
@@ -338,11 +435,18 @@ uploadRoute.post('/', async (c) => {
       fileType,
       mediaId,
       fileName,
-      normalizeRowCount(body.row_count)
+      rowCount
     )
     .run()
 
-  const uploadHistoryId = result.meta.last_row_id ?? null
+  const uploadHistoryId = await resolveUploadHistoryId(
+    c.env.DB,
+    result,
+    fileType,
+    mediaId,
+    fileName,
+    rowCount
+  )
 
   if (fileType === 'ad_media_csv') {
     if (!uploadHistoryId) {
@@ -352,16 +456,9 @@ uploadRoute.post('/', async (c) => {
       )
     }
 
-    if (!Array.isArray(body.csv_rows)) {
-      return c.json<ApiResponse<null>>(
-        { success: false, error: '広告媒体CSVの行データが送信されていません' },
-        400
-      )
-    }
-
     try {
       const dailyRows = buildAdMediaDailyRows(
-        body.csv_rows,
+        adMediaCsvRows,
         mediaId,
         uploadHistoryId
       )

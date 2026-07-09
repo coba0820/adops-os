@@ -127,6 +127,7 @@ export function mountCsvUploadBox(rootEl, options) {
           file_name: file.name,
           row_count: rowCount,
           csv_rows: fileType === 'ad_media_csv' ? rows : undefined,
+          csv_text: fileType === 'ad_media_csv' ? text : undefined,
         })
         if (fileType === 'ad_media_csv') {
           showToast('広告媒体CSVの実績を保存しました', 'success')
