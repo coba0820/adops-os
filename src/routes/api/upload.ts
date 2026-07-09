@@ -53,7 +53,7 @@ uploadRoute.get('/', async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT
        h.id, h.file_type, h.media_id, m.media_name,
-       h.file_name, h.row_count, h.status, h.uploaded_at
+       h.file_name, h.row_count, h.target_date, h.status, h.uploaded_at
      FROM upload_history h
      LEFT JOIN media_master m ON h.media_id = m.id
      ORDER BY h.uploaded_at DESC, h.id DESC
@@ -81,10 +81,10 @@ uploadRoute.get('/today', async (c) => {
       c.env.DB.prepare(
         `SELECT
            h.id, h.file_type, h.media_id, m.media_name,
-           h.file_name, h.row_count, h.status, h.uploaded_at
+           h.file_name, h.row_count, h.target_date, h.status, h.uploaded_at
          FROM upload_history h
          LEFT JOIN media_master m ON h.media_id = m.id
-         WHERE date(h.uploaded_at, '+9 hours') = date('now', '+9 hours')
+         WHERE h.target_date = date('now', '+9 hours')
            AND h.status = 'success'
          ORDER BY h.uploaded_at DESC, h.id DESC`
       ).all<UploadHistoryView>(),
@@ -216,8 +216,8 @@ uploadRoute.post('/', async (c) => {
 
   const result = await c.env.DB.prepare(
     `INSERT INTO upload_history
-       (file_type, media_id, file_name, row_count, status)
-     VALUES (?, ?, ?, ?, 'success')`
+       (file_type, media_id, file_name, row_count, target_date, status)
+     VALUES (?, ?, ?, ?, date('now', '+9 hours'), 'success')`
   )
     .bind(
       fileType,

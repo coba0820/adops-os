@@ -75,6 +75,7 @@ export interface UploadHistory {
   media_id: number | null
   file_name: string
   row_count: number
+  target_date: string | null
   status: UploadStatus
   uploaded_at: string
 }
