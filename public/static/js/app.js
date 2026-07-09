@@ -7,6 +7,7 @@ import { renderSidebar, MENU_ITEMS } from './components/sidebar.js'
 import { renderDashboardPage } from './pages/dashboard.js'
 import { renderDataImportPage } from './pages/data-import.js'
 import { renderMasterPage } from './pages/master.js'
+import { renderAnalysisPage } from './pages/analysis.js'
 import { renderComingSoonPage } from './pages/coming-soon.js'
 
 // ------------------------------------------------------------
@@ -19,7 +20,7 @@ const ROUTES = {
   dashboard: { title: 'ダッシュボード', render: renderDashboardPage },
   'data-import': { title: 'データ取込', render: renderDataImportPage },
   master: { title: 'マスタ管理', render: renderMasterPage },
-  analysis: { title: '実績分析', render: (el) => renderComingSoonPage('実績分析', el) },
+  analysis: { title: '実績分析', render: renderAnalysisPage },
   budget: { title: '予算管理', render: (el) => renderComingSoonPage('予算管理', el) },
   forecast: { title: '着地予測', render: (el) => renderComingSoonPage('着地予測', el) },
   settings: { title: '設定', render: (el) => renderComingSoonPage('設定', el) },

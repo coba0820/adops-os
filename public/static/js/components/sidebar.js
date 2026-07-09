@@ -13,7 +13,7 @@ export const MENU_ITEMS = [
   { key: 'dashboard', label: 'ダッシュボード', icon: 'fa-gauge-high', comingSoon: false },
   { key: 'data-import', label: 'データ取込', icon: 'fa-file-arrow-up', comingSoon: false },
   { key: 'master', label: 'マスタ管理', icon: 'fa-database', comingSoon: false },
-  { key: 'analysis', label: '実績分析', icon: 'fa-chart-line', comingSoon: true },
+  { key: 'analysis', label: '実績分析', icon: 'fa-chart-line', comingSoon: false },
   { key: 'budget', label: '予算管理', icon: 'fa-wallet', comingSoon: true },
   { key: 'forecast', label: '着地予測', icon: 'fa-chart-simple', comingSoon: true },
   { key: 'settings', label: '設定', icon: 'fa-gear', comingSoon: true },

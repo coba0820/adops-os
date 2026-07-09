@@ -649,6 +649,80 @@ button {
   }
 }
 
+/* 実績分析 */
+.analysis-filter-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.analysis-filter-bar .form-row {
+  margin-bottom: 0;
+}
+
+.analysis-filter-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.analysis-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.analysis-summary-card {
+  min-height: 78px;
+  padding: 13px 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+}
+
+.analysis-summary-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  margin-bottom: 7px;
+}
+
+.analysis-summary-label i {
+  color: var(--color-primary);
+}
+
+.analysis-summary-value {
+  font-size: 20px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.analysis-table .analysis-total-row td {
+  background: var(--color-primary-soft);
+  font-weight: 700;
+}
+
+@media (max-width: 1000px) {
+  .analysis-filter-bar,
+  .analysis-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .analysis-filter-bar,
+  .analysis-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-filter-actions {
+    flex-wrap: wrap;
+  }
+}
+
 /* ------------------------------------------------------------
    テーブル
    ------------------------------------------------------------ */
@@ -853,6 +927,7 @@ button {
 }
 
 .text-center { text-align: center; }
+.text-right { text-align: right; }
 .mt-0 { margin-top: 0; }
 .empty-state {
   padding: 40px 20px;
