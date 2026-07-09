@@ -9,7 +9,9 @@ import type { ApiResponse, Bindings } from '../../types'
 export const analysisRoute = new Hono<{ Bindings: Bindings }>()
 
 type AnalysisRow = {
-  target_date: string
+  period: string
+  period_start: string
+  period_end: string
   media_id: number
   media_name: string
   cost: number
@@ -34,10 +36,14 @@ type AnalysisResponse = {
     start_date: string | null
     end_date: string | null
     media_id: number | null
+    ad_code: string | null
+    group_by: AnalysisGroupBy
   }
   summary: AnalysisSummary
   rows: AnalysisRow[]
 }
+
+type AnalysisGroupBy = 'daily' | 'weekly' | 'monthly'
 
 function parseDateParam(value: string | null) {
   if (!value) return null
@@ -48,6 +54,16 @@ function parseMediaIdParam(value: string | null) {
   if (!value) return null
   const mediaId = Number(value)
   return Number.isInteger(mediaId) && mediaId > 0 ? mediaId : null
+}
+
+function parseGroupByParam(value: string | null): AnalysisGroupBy {
+  if (value === 'weekly' || value === 'monthly') return value
+  return 'daily'
+}
+
+function parseAdCodeParam(value: string | null) {
+  const adCode = value?.trim()
+  return adCode ? adCode : null
 }
 
 function toNumber(value: unknown) {
@@ -75,10 +91,39 @@ function prepareWithBindings(
   return bindings.length > 0 ? statement.bind(...bindings) : statement
 }
 
+function getPeriodSql(groupBy: AnalysisGroupBy) {
+  if (groupBy === 'weekly') {
+    const periodStart =
+      "date(d.target_date, '-' || ((CAST(strftime('%w', d.target_date) AS INTEGER) + 6) % 7) || ' days')"
+    return {
+      period: `${periodStart} || '〜' || date(${periodStart}, '+6 days')`,
+      periodStart,
+      periodEnd: `date(${periodStart}, '+6 days')`,
+    }
+  }
+
+  if (groupBy === 'monthly') {
+    return {
+      period: "strftime('%Y-%m', d.target_date)",
+      periodStart: "date(d.target_date, 'start of month')",
+      periodEnd: "date(d.target_date, 'start of month', '+1 month', '-1 day')",
+    }
+  }
+
+  return {
+    period: 'd.target_date',
+    periodStart: 'd.target_date',
+    periodEnd: 'd.target_date',
+  }
+}
+
 analysisRoute.get('/summary', async (c) => {
   const startDate = parseDateParam(c.req.query('start_date') ?? null)
   const endDate = parseDateParam(c.req.query('end_date') ?? null)
   const mediaId = parseMediaIdParam(c.req.query('media_id') ?? null)
+  const adCode = parseAdCodeParam(c.req.query('ad_code') ?? null)
+  const groupBy = parseGroupByParam(c.req.query('group_by') ?? null)
+  const periodSql = getPeriodSql(groupBy)
 
   const where: string[] = []
   const bindings: Array<string | number> = []
@@ -95,12 +140,29 @@ analysisRoute.get('/summary', async (c) => {
     where.push('d.media_id = ?')
     bindings.push(mediaId)
   }
+  if (adCode) {
+    where.push(
+      `EXISTS (
+        SELECT 1
+        FROM campaign_master c
+        WHERE c.media_id = d.media_id
+          AND c.ad_code = ?
+          AND (
+            c.campaign_name = d.campaign_name
+            OR c.ad_code = d.campaign_id
+          )
+      )`
+    )
+    bindings.push(adCode)
+  }
 
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
 
   const detailSql = `
     SELECT
-      d.target_date,
+      ${periodSql.period} AS period,
+      ${periodSql.periodStart} AS period_start,
+      ${periodSql.periodEnd} AS period_end,
       d.media_id,
       COALESCE(m.media_name, '') AS media_name,
       SUM(d.spend) AS cost,
@@ -109,8 +171,8 @@ analysisRoute.get('/summary', async (c) => {
     FROM ad_media_daily d
     LEFT JOIN media_master m ON d.media_id = m.id
     ${whereSql}
-    GROUP BY d.target_date, d.media_id, m.media_name
-    ORDER BY d.target_date ASC, m.media_name ASC
+    GROUP BY period, period_start, period_end, d.media_id, m.media_name
+    ORDER BY period_start ASC, m.media_name ASC
   `
 
   const summarySql = `
@@ -124,7 +186,9 @@ analysisRoute.get('/summary', async (c) => {
 
   const [{ results }, summaryResult] = await Promise.all([
     prepareWithBindings(c.env.DB, detailSql, bindings).all<{
-      target_date: string
+      period: string
+      period_start: string
+      period_end: string
       media_id: number
       media_name: string
       cost: number
@@ -139,7 +203,9 @@ analysisRoute.get('/summary', async (c) => {
   ])
 
   const rows = results.map((row) => ({
-    target_date: row.target_date,
+    period: row.period,
+    period_start: row.period_start,
+    period_end: row.period_end,
     media_id: row.media_id,
     media_name: row.media_name,
     ...buildMetrics(
@@ -162,6 +228,8 @@ analysisRoute.get('/summary', async (c) => {
         start_date: startDate,
         end_date: endDate,
         media_id: mediaId,
+        ad_code: adCode,
+        group_by: groupBy,
       },
       summary,
       rows,

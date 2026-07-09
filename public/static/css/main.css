@@ -652,7 +652,7 @@ button {
 /* 実績分析 */
 .analysis-filter-bar {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  grid-template-columns: repeat(5, minmax(130px, 1fr)) auto;
   gap: 12px;
   align-items: end;
 }
