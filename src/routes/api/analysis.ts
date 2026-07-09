@@ -14,6 +14,7 @@ type AnalysisRow = {
   period_end: string
   media_id: number
   media_name: string
+  ad_code: string | null
   cost: number
   impressions: number
   clicks: number
@@ -165,14 +166,25 @@ analysisRoute.get('/summary', async (c) => {
       ${periodSql.periodEnd} AS period_end,
       d.media_id,
       COALESCE(m.media_name, '') AS media_name,
+      (
+        SELECT c.ad_code
+        FROM campaign_master c
+        WHERE c.media_id = d.media_id
+          AND (
+            c.campaign_name = d.campaign_name
+            OR c.ad_code = d.campaign_id
+          )
+        ORDER BY c.id ASC
+        LIMIT 1
+      ) AS ad_code,
       SUM(d.spend) AS cost,
       SUM(d.impressions) AS impressions,
       SUM(d.clicks) AS clicks
     FROM ad_media_daily d
     LEFT JOIN media_master m ON d.media_id = m.id
     ${whereSql}
-    GROUP BY period, period_start, period_end, d.media_id, m.media_name
-    ORDER BY period_start ASC, m.media_name ASC
+    GROUP BY period, period_start, period_end, d.media_id, m.media_name, ad_code
+    ORDER BY period_start ASC, m.media_name ASC, ad_code ASC
   `
 
   const summarySql = `
@@ -191,6 +203,7 @@ analysisRoute.get('/summary', async (c) => {
       period_end: string
       media_id: number
       media_name: string
+      ad_code: string | null
       cost: number
       impressions: number
       clicks: number
@@ -208,6 +221,7 @@ analysisRoute.get('/summary', async (c) => {
     period_end: row.period_end,
     media_id: row.media_id,
     media_name: row.media_name,
+    ad_code: row.ad_code,
     ...buildMetrics(
       toNumber(row.cost),
       toNumber(row.impressions),

@@ -206,6 +206,7 @@ function renderAnalysisTable(summary, rows, groupBy) {
   const totalRow = renderTableRow({
     period: '合計',
     media_name: '-',
+    ad_code: '-',
     ...summary,
   }, true, groupBy)
 
@@ -225,6 +226,7 @@ function renderAnalysisTable(summary, rows, groupBy) {
             <tr>
               <th>期間</th>
               <th>媒体</th>
+              <th>広告コード</th>
               ${METRIC_COLUMNS.map((column) => `<th class="text-right">${column.label}</th>`).join('')}
             </tr>
           </thead>
@@ -243,6 +245,7 @@ function renderTableRow(row, isTotal, groupBy) {
     <tr class="${isTotal ? 'analysis-total-row' : ''}">
       <td>${escapeHtml(isTotal ? row.period : formatPeriod(row, groupBy))}</td>
       <td>${escapeHtml(row.media_name || '-')}</td>
+      <td>${escapeHtml(isTotal ? '-' : row.ad_code || '未設定')}</td>
       ${METRIC_COLUMNS.map((column) => `<td class="text-right">${column.format(row[column.key] || 0)}</td>`).join('')}
     </tr>
   `
