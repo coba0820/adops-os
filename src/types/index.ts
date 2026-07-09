@@ -62,7 +62,12 @@ export interface CampaignMasterView extends CampaignMaster {
  * CSVアップロード履歴（upload_history）
  * v1ではCSVの実データは保存せず、メタ情報のみ記録する
  */
-export type UploadFileType = 'ad_media' | 'media_aggregate' | 'payment_report'
+export type UploadFileType =
+  | 'ad_media_csv'
+  | 'site_summary_csv'
+  | 'payment_report_csv'
+
+export type UploadStatus = 'success'
 
 export interface UploadHistory {
   id: number
@@ -70,7 +75,30 @@ export interface UploadHistory {
   media_id: number | null
   file_name: string
   row_count: number
+  status: UploadStatus
   uploaded_at: string
+}
+
+export interface UploadHistoryView extends UploadHistory {
+  media_name: string | null
+}
+
+export interface UploadStatusItem {
+  file_type: UploadFileType
+  label: string
+  media_id: number | null
+  media_name: string | null
+  uploaded: boolean
+  latest_upload: UploadHistoryView | null
+}
+
+export interface TodayUploadStatus {
+  target_date: string
+  active_media_count: number
+  uploaded_count: number
+  required_count: number
+  completion_rate: number
+  items: UploadStatusItem[]
 }
 
 /**
