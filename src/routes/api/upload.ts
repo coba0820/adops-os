@@ -22,7 +22,13 @@ const COMMON_REQUIRED_FILE_TYPES: UploadFileType[] = [
   'payment_report_csv',
 ]
 
-const INSERT_BATCH_SIZE = 100
+const UPLOAD_DETAIL_TABLES = [
+  'ad_media_daily',
+  'media_summary_daily',
+] as const
+
+const INSERT_BATCH_SIZE = 25
+const LOOKUP_BATCH_SIZE = 50
 
 type CsvRows = string[][]
 
@@ -396,55 +402,6 @@ function aggregateMediaSummaryRows(rows: MediaSummaryDailyRow[]) {
   return [...rowsByKey.values()]
 }
 
-function buildOrWhere(
-  rows: number,
-  condition: string
-) {
-  return Array.from({ length: rows }, () => `(${condition})`).join(' OR ')
-}
-
-async function deleteExistingAdMediaRows(db: D1Database, rows: AdMediaDailyRow[]) {
-  for (let i = 0; i < rows.length; i += INSERT_BATCH_SIZE) {
-    const chunk = rows.slice(i, i + INSERT_BATCH_SIZE)
-    if (chunk.length === 0) continue
-
-    const whereSql = buildOrWhere(
-      chunk.length,
-      "target_date = ? AND media_id = ? AND COALESCE(campaign_id, '') = ?"
-    )
-    const bindings = chunk.flatMap((row) => [
-      row.targetDate,
-      row.mediaId,
-      row.campaignId || '',
-    ])
-
-    await db.prepare(`DELETE FROM ad_media_daily WHERE ${whereSql}`)
-      .bind(...bindings)
-      .run()
-  }
-}
-
-async function deleteExistingMediaSummaryRows(db: D1Database, rows: MediaSummaryDailyRow[]) {
-  for (let i = 0; i < rows.length; i += INSERT_BATCH_SIZE) {
-    const chunk = rows.slice(i, i + INSERT_BATCH_SIZE)
-    if (chunk.length === 0) continue
-
-    const whereSql = buildOrWhere(
-      chunk.length,
-      "target_date = ? AND COALESCE(media_id, -1) = ? AND COALESCE(ad_code, '') = ?"
-    )
-    const bindings = chunk.flatMap((row) => [
-      row.targetDate,
-      row.mediaId ?? -1,
-      row.adCode || '',
-    ])
-
-    await db.prepare(`DELETE FROM media_summary_daily WHERE ${whereSql}`)
-      .bind(...bindings)
-      .run()
-  }
-}
-
 function buildAdMediaDailyRows(rows: CsvRows, mediaId: number, uploadHistoryId: number) {
   const [headerRow, ...bodyRows] = rows
   if (!headerRow || headerRow.length === 0) {
@@ -500,8 +457,8 @@ async function resolveMediaIdsByAdCode(db: D1Database, adCodes: string[]) {
   const uniqueAdCodes = [...new Set(adCodes.map((adCode) => adCode.trim()).filter(Boolean))]
   const mediaIdSets = new Map<string, Set<number>>()
 
-  for (let i = 0; i < uniqueAdCodes.length; i += INSERT_BATCH_SIZE) {
-    const chunk = uniqueAdCodes.slice(i, i + INSERT_BATCH_SIZE)
+  for (let i = 0; i < uniqueAdCodes.length; i += LOOKUP_BATCH_SIZE) {
+    const chunk = uniqueAdCodes.slice(i, i + LOOKUP_BATCH_SIZE)
     if (chunk.length === 0) continue
 
     const placeholders = chunk.map(() => '?').join(', ')
@@ -710,6 +667,74 @@ uploadRoute.get('/today', async (c) => {
   })
 })
 
+uploadRoute.delete('/:id', async (c) => {
+  const uploadHistoryId = Number(c.req.param('id'))
+  if (!Number.isInteger(uploadHistoryId) || uploadHistoryId <= 0) {
+    return c.json<ApiResponse<null>>(
+      { success: false, error: '削除対象の取込履歴IDが正しくありません' },
+      400
+    )
+  }
+
+  const upload = await c.env.DB.prepare(
+    `SELECT id, file_type, media_id, file_name, row_count, target_date, status, uploaded_at
+     FROM upload_history
+     WHERE id = ?`
+  )
+    .bind(uploadHistoryId)
+    .first<UploadHistoryView>()
+
+  if (!upload) {
+    return c.json<ApiResponse<null>>(
+      { success: false, error: '削除対象の取込履歴が見つかりません' },
+      404
+    )
+  }
+
+  try {
+    const statements = [
+      ...UPLOAD_DETAIL_TABLES.map((tableName) =>
+        c.env.DB.prepare(`DELETE FROM ${tableName} WHERE upload_history_id = ?`)
+          .bind(uploadHistoryId)
+      ),
+      c.env.DB.prepare(`DELETE FROM upload_history WHERE id = ?`)
+        .bind(uploadHistoryId),
+    ]
+
+    const results = await c.env.DB.batch(statements)
+    const deletedCounts = UPLOAD_DETAIL_TABLES.reduce<Record<string, number>>(
+      (counts, tableName, index) => {
+        counts[tableName] = Number(results[index]?.meta?.changes ?? 0)
+        return counts
+      },
+      {}
+    )
+    deletedCounts.upload_history = Number(results[UPLOAD_DETAIL_TABLES.length]?.meta?.changes ?? 0)
+
+    return c.json<ApiResponse<{
+      id: number
+      file_name: string
+      deleted_counts: Record<string, number>
+    }>>({
+      success: true,
+      data: {
+        id: uploadHistoryId,
+        file_name: upload.file_name,
+        deleted_counts: deletedCounts,
+      },
+    })
+  } catch (err) {
+    logUploadError('upload delete failed', {
+      uploadHistoryId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return c.json<ApiResponse<null>>(
+      { success: false, error: '取込履歴の削除に失敗しました' },
+      500
+    )
+  }
+})
+
 uploadRoute.post('/', async (c) => {
   const body = await c.req.json<{
     file_type: string
@@ -885,8 +910,6 @@ uploadRoute.post('/', async (c) => {
 
   try {
     if (fileType === 'ad_media_csv') {
-      await deleteExistingAdMediaRows(c.env.DB, preparedAdMediaRows)
-
       savedRows = preparedAdMediaRows.length
       logUploadInfo('ad_media_daily insert target rows', {
         uploadHistoryId,
@@ -902,7 +925,7 @@ uploadRoute.post('/', async (c) => {
         await c.env.DB.batch(
           chunk.map((row) =>
             c.env.DB.prepare(
-              `INSERT INTO ad_media_daily
+              `INSERT OR REPLACE INTO ad_media_daily
                  (target_date, media_id, account_name, account_id,
                   campaign_name, campaign_id, clicks, served_ads,
                   impressions, spend, media_cv, upload_history_id)
@@ -931,8 +954,6 @@ uploadRoute.post('/', async (c) => {
     }
 
     if (fileType === 'site_summary_csv') {
-      await deleteExistingMediaSummaryRows(c.env.DB, preparedMediaSummaryRows)
-
       savedRows = preparedMediaSummaryRows.length
       logUploadInfo('media_summary_daily insert target rows', {
         uploadHistoryId,
@@ -950,7 +971,7 @@ uploadRoute.post('/', async (c) => {
         await c.env.DB.batch(
           chunk.map((row) =>
             c.env.DB.prepare(
-              `INSERT INTO media_summary_daily
+              `INSERT OR REPLACE INTO media_summary_daily
                  (target_date, media_id, ad_code, access_count,
                   registration_count, provisional_registration_count,
                   upload_history_id)

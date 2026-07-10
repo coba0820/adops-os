@@ -4,6 +4,7 @@
 // v1.1ではCSVの実データは保存せず、upload_history に履歴のみ記録する。
 // ============================================================
 import { mountCsvUploadBox } from '../components/csv-upload-box.js'
+import { showToast } from '../components/toast.js'
 
 const TABS = [
   {
@@ -141,6 +142,7 @@ async function refreshUploadHistory(container) {
   try {
     const res = await axios.get('/api/upload')
     root.innerHTML = renderUploadHistory(res.data.data || [])
+    bindUploadHistoryEvents(root, container)
   } catch (err) {
     console.error(err)
     root.innerHTML = `<div class="empty-state">取込履歴を取得できませんでした</div>`
@@ -237,6 +239,11 @@ function renderUploadHistory(list) {
         <td>${Number(item.row_count).toLocaleString('ja-JP')}行</td>
         <td><span class="badge badge-active">success</span></td>
         <td>${formatDateTime(item.uploaded_at)}</td>
+        <td>
+          <button class="icon-btn danger" data-action="delete-upload" data-id="${item.id}" data-file-name="${escapeHtml(item.file_name)}" title="削除">
+            <i class="fa-solid fa-trash"></i>
+          </button>
+        </td>
       </tr>
     `
     )
@@ -253,12 +260,38 @@ function renderUploadHistory(list) {
             <th>行数</th>
             <th>status</th>
             <th>取込日時</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
   `
+}
+
+function bindUploadHistoryEvents(root, container) {
+  root.querySelectorAll('[data-action="delete-upload"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id
+      const fileName = btn.dataset.fileName || ''
+      if (!id) return
+
+      const confirmed = window.confirm(`「${fileName}」の取込履歴と紐づく明細を削除します。よろしいですか？`)
+      if (!confirmed) return
+
+      btn.disabled = true
+      try {
+        await axios.delete(`/api/upload/${id}`)
+        showToast('取込履歴を削除しました', 'success')
+        window.dispatchEvent(new CustomEvent('adops:analysis-invalidated'))
+        await refreshUploadPanels(container)
+      } catch (err) {
+        console.error(err)
+        showToast(err.response?.data?.error || '取込履歴の削除に失敗しました', 'error')
+        btn.disabled = false
+      }
+    })
+  })
 }
 
 function renderImportStatusBadge(uploaded) {
