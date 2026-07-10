@@ -76,7 +76,7 @@ const MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
   registrationCount: { label: '登録者数', aliases: ['登録者数', '登録', 'Registration', 'Registrations', 'registration_count'] },
   provisionalRegistrationCount: {
     label: '仮登録者数',
-    aliases: ['仮登録者数', '仮登録', 'Provisional Registration', 'provisional_registration_count'],
+    aliases: ['仮登録者数', '仮登録数', '仮登録', 'Provisional Registration', 'Provisional Registrations', 'provisional_registration_count'],
   },
 }
 
@@ -262,6 +262,18 @@ function parseTargetDate(value: unknown) {
 
 function isBlankRow(row: string[]) {
   return row.every((cell) => String(cell ?? '').trim() === '')
+}
+
+function countBodyRows(rows: CsvRows) {
+  return rows.slice(1).filter((row) => !isBlankRow(row)).length
+}
+
+function logUploadInfo(message: string, details: Record<string, unknown>) {
+  console.info(`[api/upload] ${message}`, details)
+}
+
+function logUploadError(message: string, details: Record<string, unknown>) {
+  console.error(`[api/upload] ${message}`, details)
 }
 
 function buildAdMediaDailyRows(rows: CsvRows, mediaId: number, uploadHistoryId: number) {
@@ -558,12 +570,36 @@ uploadRoute.post('/', async (c) => {
       ? normalizeCsvRows(body.csv_rows, body.csv_text)
       : []
 
+  if (fileType === 'ad_media_csv' || fileType === 'site_summary_csv') {
+    logUploadInfo('CSV detail payload received', {
+      fileType,
+      fileName,
+      rowCount,
+      csvRows: csvRows.length,
+      bodyRows: countBodyRows(csvRows),
+      hasCsvRows: Array.isArray(body.csv_rows),
+      csvTextLength: typeof body.csv_text === 'string' ? body.csv_text.length : 0,
+      headers: csvRows[0] ?? [],
+      normalizedHeaders: csvRows[0]?.map((header) => normalizeHeader(header)) ?? [],
+    })
+  }
+
   if (
     (fileType === 'ad_media_csv' || fileType === 'site_summary_csv') &&
     csvRows.length === 0
   ) {
     return c.json<ApiResponse<null>>(
       { success: false, error: `${UPLOAD_FILE_TYPE_LABELS[fileType]}の行データが送信されていません` },
+      400
+    )
+  }
+
+  if (
+    (fileType === 'ad_media_csv' || fileType === 'site_summary_csv') &&
+    countBodyRows(csvRows) === 0
+  ) {
+    return c.json<ApiResponse<null>>(
+      { success: false, error: `${UPLOAD_FILE_TYPE_LABELS[fileType]}に保存対象の明細行がありません` },
       400
     )
   }
@@ -614,6 +650,15 @@ uploadRoute.post('/', async (c) => {
       )
 
       savedRows = dailyRows.length
+      logUploadInfo('ad_media_daily insert target rows', {
+        uploadHistoryId,
+        savedRows,
+      })
+
+      if (savedRows === 0) {
+        throw new Error('広告媒体CSVに保存対象の明細行がありません')
+      }
+
       for (let i = 0; i < dailyRows.length; i += INSERT_BATCH_SIZE) {
         const chunk = dailyRows.slice(i, i + INSERT_BATCH_SIZE)
         await c.env.DB.batch(
@@ -641,6 +686,10 @@ uploadRoute.post('/', async (c) => {
           )
         )
       }
+      logUploadInfo('ad_media_daily insert completed', {
+        uploadHistoryId,
+        savedRows,
+      })
     }
 
     if (fileType === 'site_summary_csv') {
@@ -657,6 +706,17 @@ uploadRoute.post('/', async (c) => {
       )
 
       savedRows = summaryRows.length
+      logUploadInfo('media_summary_daily insert target rows', {
+        uploadHistoryId,
+        savedRows,
+        linkedMediaRows: summaryRows.filter((row) => row.mediaId !== null).length,
+        unlinkedMediaRows: summaryRows.filter((row) => row.mediaId === null).length,
+      })
+
+      if (savedRows === 0) {
+        throw new Error('媒体集計CSVに保存対象の明細行がありません')
+      }
+
       for (let i = 0; i < summaryRows.length; i += INSERT_BATCH_SIZE) {
         const chunk = summaryRows.slice(i, i + INSERT_BATCH_SIZE)
         await c.env.DB.batch(
@@ -679,8 +739,17 @@ uploadRoute.post('/', async (c) => {
           )
         )
       }
+      logUploadInfo('media_summary_daily insert completed', {
+        uploadHistoryId,
+        savedRows,
+      })
     }
   } catch (err) {
+    logUploadError('detail insert failed', {
+      fileType,
+      uploadHistoryId,
+      error: err instanceof Error ? err.message : String(err),
+    })
     const message = err instanceof Error
       ? err.message
       : `${UPLOAD_FILE_TYPE_LABELS[fileType]}の明細保存に失敗しました`
