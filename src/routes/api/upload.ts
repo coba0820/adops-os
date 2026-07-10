@@ -1,10 +1,3 @@
-// ============================================================
-// CSVアップロード履歴 API（/api/upload）
-// v1では「CSVの保存・分析・結合」は行わない。
-// フロントエンドでCSVをパース・プレビューした後、
-// 「いつ・どのファイルを・何件アップロードしたか」の
-// メタ情報だけをこのAPIで記録する。
-// ============================================================
 import { Hono } from 'hono'
 import type {
   ApiResponse,
@@ -29,9 +22,63 @@ const COMMON_REQUIRED_FILE_TYPES: UploadFileType[] = [
   'payment_report_csv',
 ]
 
-const AD_MEDIA_DAILY_INSERT_BATCH_SIZE = 100
+const INSERT_BATCH_SIZE = 100
 
 type CsvRows = string[][]
+
+type AdMediaDailyRow = {
+  targetDate: string
+  mediaId: number
+  accountName: string
+  accountId: string
+  campaignName: string
+  campaignId: string
+  clicks: number
+  servedAds: number
+  impressions: number
+  spend: number
+  mediaCv: number
+  uploadHistoryId: number
+}
+
+type MediaSummaryDailyRow = {
+  targetDate: string
+  mediaId: number | null
+  adCode: string
+  accessCount: number
+  registrationCount: number
+  provisionalRegistrationCount: number
+  uploadHistoryId: number
+}
+
+type HeaderDefinition = {
+  label: string
+  aliases: string[]
+}
+
+const AD_MEDIA_HEADERS: Record<string, HeaderDefinition> = {
+  date: { label: 'Date', aliases: ['Date', '日付', '年月日'] },
+  accountName: { label: 'Account Name', aliases: ['Account Name', 'アカウント名'] },
+  accountId: { label: 'Account ID', aliases: ['Account ID', 'アカウントID'] },
+  campaignName: { label: 'Campaign Name', aliases: ['Campaign Name', 'キャンペーン名'] },
+  campaignId: { label: 'Campaign ID', aliases: ['Campaign ID', 'キャンペーンID', '広告コード'] },
+  clicks: { label: 'Clicks', aliases: ['Clicks', 'Click', 'クリック', 'クリック数'] },
+  servedAds: { label: 'Served Ads', aliases: ['Served Ads', '配信数'] },
+  impressions: { label: 'Impressions', aliases: ['Impressions', 'Imp', 'インプレッション', '表示回数'] },
+  spend: { label: 'Spent', aliases: ['Spent', 'Spend', 'Cost', '費用', '広告費'] },
+  mediaCv: { label: '媒体CV', aliases: ['媒体CV', 'CV', 'Conversions', 'Conversion', 'コンバージョン', 'コンバージョン数'] },
+}
+
+const MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
+  date: { label: '日付', aliases: ['日付', 'Date', '年月日'] },
+  adCode: { label: '広告コード', aliases: ['広告コード', 'Ad Code', 'ad_code', 'Campaign ID'] },
+  accessCount: { label: 'アクセス数', aliases: ['アクセス数', 'アクセス', 'Access', 'access_count'] },
+  registrationCount: { label: '登録者数', aliases: ['登録者数', '登録', 'Registration', 'Registrations', 'registration_count'] },
+  provisionalRegistrationCount: {
+    label: '仮登録者数',
+    aliases: ['仮登録者数', '仮登録', 'Provisional Registration', 'provisional_registration_count'],
+  },
+}
 
 function parseCsvText(text: string): CsvRows {
   const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
@@ -114,10 +161,26 @@ function buildHeaderIndex(headerRow: string[]) {
   return index
 }
 
-function getCell(row: string[], headerIndex: Map<string, number>, header: string) {
-  const index = headerIndex.get(normalizeHeader(header))
-  if (index === undefined) return ''
-  return String(row[index] ?? '').trim()
+function hasHeader(headerIndex: Map<string, number>, aliases: string[]) {
+  return aliases.some((alias) => headerIndex.has(normalizeHeader(alias)))
+}
+
+function getCellByAliases(row: string[], headerIndex: Map<string, number>, aliases: string[]) {
+  for (const alias of aliases) {
+    const index = headerIndex.get(normalizeHeader(alias))
+    if (index !== undefined) return String(row[index] ?? '').trim()
+  }
+  return ''
+}
+
+function ensureHeaders(headerIndex: Map<string, number>, definitions: HeaderDefinition[]) {
+  const missingHeaders = definitions
+    .filter((definition) => !hasHeader(headerIndex, definition.aliases))
+    .map((definition) => definition.label)
+
+  if (missingHeaders.length > 0) {
+    throw new Error(`CSVに必要な列がありません: ${missingHeaders.join(', ')}`)
+  }
 }
 
 function normalizeRowCount(rowCount: unknown) {
@@ -164,7 +227,7 @@ function parseInteger(value: unknown) {
 }
 
 function parseMoney(value: unknown) {
-  const normalized = String(value ?? '').replace(/[,\s¥￥$]/g, '')
+  const normalized = String(value ?? '').replace(/[,\s￥¥$]/g, '')
   if (normalized === '') return 0
   const number = Number(normalized)
   return Number.isFinite(number) ? number : 0
@@ -174,9 +237,15 @@ function parseTargetDate(value: unknown) {
   const raw = String(value ?? '').trim()
   if (!raw) return null
 
-  const ymd = raw.match(/^(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?$/)
+  const ymd = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/)
   if (ymd) {
     const [, year, month, day] = ymd
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+  }
+
+  const ymdJapanese = raw.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日?$/)
+  if (ymdJapanese) {
+    const [, year, month, day] = ymdJapanese
     return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
   }
 
@@ -202,27 +271,20 @@ function buildAdMediaDailyRows(rows: CsvRows, mediaId: number, uploadHistoryId: 
   }
 
   const headerIndex = buildHeaderIndex(headerRow)
-  const requiredHeaders = [
-    'Date',
-    'Account Name',
-    'Account ID',
-    'Campaign Name',
-    'Campaign ID',
-    'Clicks',
-    'Served Ads',
-    'Impressions',
-    'Spent',
-  ]
-  const missingHeaders = requiredHeaders.filter(
-    (header) => !headerIndex.has(normalizeHeader(header))
-  )
+  ensureHeaders(headerIndex, [
+    AD_MEDIA_HEADERS.date,
+    AD_MEDIA_HEADERS.accountName,
+    AD_MEDIA_HEADERS.accountId,
+    AD_MEDIA_HEADERS.campaignName,
+    AD_MEDIA_HEADERS.campaignId,
+    AD_MEDIA_HEADERS.clicks,
+    AD_MEDIA_HEADERS.servedAds,
+    AD_MEDIA_HEADERS.impressions,
+    AD_MEDIA_HEADERS.spend,
+  ])
 
-  if (missingHeaders.length > 0) {
-    throw new Error(`CSVに必要な列がありません: ${missingHeaders.join(', ')}`)
-  }
-
-  return bodyRows.filter((row) => !isBlankRow(row)).map((row, index) => {
-    const targetDate = parseTargetDate(getCell(row, headerIndex, 'Date'))
+  return bodyRows.filter((row) => !isBlankRow(row)).map((row, index): AdMediaDailyRow => {
+    const targetDate = parseTargetDate(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.date.aliases))
     if (!targetDate) {
       throw new Error(`${index + 2}行目のDateが正しくありません`)
     }
@@ -230,22 +292,108 @@ function buildAdMediaDailyRows(rows: CsvRows, mediaId: number, uploadHistoryId: 
     return {
       targetDate,
       mediaId,
-      accountName: getCell(row, headerIndex, 'Account Name'),
-      accountId: getCell(row, headerIndex, 'Account ID'),
-      campaignName: getCell(row, headerIndex, 'Campaign Name'),
-      campaignId: getCell(row, headerIndex, 'Campaign ID'),
-      clicks: parseInteger(getCell(row, headerIndex, 'Clicks')),
-      servedAds: parseInteger(getCell(row, headerIndex, 'Served Ads')),
-      impressions: parseInteger(getCell(row, headerIndex, 'Impressions')),
-      spend: parseMoney(getCell(row, headerIndex, 'Spent')),
+      accountName: getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.accountName.aliases),
+      accountId: getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.accountId.aliases),
+      campaignName: getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.campaignName.aliases),
+      campaignId: getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.campaignId.aliases),
+      clicks: parseInteger(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.clicks.aliases)),
+      servedAds: parseInteger(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.servedAds.aliases)),
+      impressions: parseInteger(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.impressions.aliases)),
+      spend: parseMoney(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.spend.aliases)),
+      mediaCv: parseInteger(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.mediaCv.aliases)),
       uploadHistoryId,
     }
   })
 }
 
-// ------------------------------------------------------------
-// 履歴一覧取得: GET /api/upload
-// ------------------------------------------------------------
+async function resolveMediaIdsByAdCode(db: D1Database, adCodes: string[]) {
+  const uniqueAdCodes = [...new Set(adCodes.map((adCode) => adCode.trim()).filter(Boolean))]
+  const mediaIdSets = new Map<string, Set<number>>()
+
+  for (let i = 0; i < uniqueAdCodes.length; i += INSERT_BATCH_SIZE) {
+    const chunk = uniqueAdCodes.slice(i, i + INSERT_BATCH_SIZE)
+    if (chunk.length === 0) continue
+
+    const placeholders = chunk.map(() => '?').join(', ')
+    const { results } = await db.prepare(
+      `SELECT c.ad_code, c.media_id
+       FROM campaign_master c
+       INNER JOIN media_master m ON c.media_id = m.id
+       WHERE m.status = 'active'
+         AND c.ad_code IN (${placeholders})`
+    )
+      .bind(...chunk)
+      .all<{ ad_code: string; media_id: number }>()
+
+    for (const row of results) {
+      const adCode = String(row.ad_code ?? '').trim()
+      if (!adCode) continue
+      const set = mediaIdSets.get(adCode) ?? new Set<number>()
+      set.add(row.media_id)
+      mediaIdSets.set(adCode, set)
+    }
+  }
+
+  const mediaIds = new Map<string, number | null>()
+  uniqueAdCodes.forEach((adCode) => {
+    const set = mediaIdSets.get(adCode)
+    mediaIds.set(adCode, set && set.size === 1 ? [...set][0] : null)
+  })
+
+  return mediaIds
+}
+
+async function buildMediaSummaryDailyRows(
+  db: D1Database,
+  rows: CsvRows,
+  uploadHistoryId: number
+) {
+  const [headerRow, ...bodyRows] = rows
+  if (!headerRow || headerRow.length === 0) {
+    throw new Error('CSVヘッダー行が見つかりません')
+  }
+
+  const headerIndex = buildHeaderIndex(headerRow)
+  ensureHeaders(headerIndex, [
+    MEDIA_SUMMARY_HEADERS.date,
+    MEDIA_SUMMARY_HEADERS.adCode,
+    MEDIA_SUMMARY_HEADERS.accessCount,
+    MEDIA_SUMMARY_HEADERS.registrationCount,
+    MEDIA_SUMMARY_HEADERS.provisionalRegistrationCount,
+  ])
+
+  const parsedRows = bodyRows.filter((row) => !isBlankRow(row)).map((row, index) => {
+    const targetDate = parseTargetDate(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.date.aliases))
+    if (!targetDate) {
+      throw new Error(`${index + 2}行目の日付が正しくありません`)
+    }
+
+    const adCode = getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.adCode.aliases)
+    if (!adCode) {
+      throw new Error(`${index + 2}行目の広告コードが空です`)
+    }
+
+    return {
+      targetDate,
+      adCode,
+      accessCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.accessCount.aliases)),
+      registrationCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.registrationCount.aliases)),
+      provisionalRegistrationCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.provisionalRegistrationCount.aliases)),
+      uploadHistoryId,
+    }
+  })
+
+  const mediaIdsByAdCode = await resolveMediaIdsByAdCode(
+    db,
+    parsedRows.map((row) => row.adCode)
+  )
+
+  return parsedRows.map((row): MediaSummaryDailyRow => ({
+    ...row,
+    mediaId: mediaIdsByAdCode.get(row.adCode) ?? null,
+  }))
+}
+
 uploadRoute.get('/', async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT
@@ -263,9 +411,6 @@ uploadRoute.get('/', async (c) => {
   })
 })
 
-// ------------------------------------------------------------
-// 今日の取込状況取得: GET /api/upload/today
-// ------------------------------------------------------------
 uploadRoute.get('/today', async (c) => {
   const [{ results: activeMedia }, { results: todayUploads }, today] =
     await Promise.all([
@@ -360,12 +505,6 @@ uploadRoute.get('/today', async (c) => {
   })
 })
 
-// ------------------------------------------------------------
-// 履歴記録: POST /api/upload
-// body: { file_type, media_id?, file_name, row_count }
-// v1.1以降のCSV取込率では、media_master.status = 'active' の媒体のみを
-// 取込対象として扱う（paused、および将来追加予定の archived は対象外）。
-// ------------------------------------------------------------
 uploadRoute.post('/', async (c) => {
   const body = await c.req.json<{
     file_type: string
@@ -414,14 +553,17 @@ uploadRoute.post('/', async (c) => {
     mediaId = requestedMediaId
   }
 
-  const adMediaCsvRows =
-    fileType === 'ad_media_csv'
+  const csvRows =
+    fileType === 'ad_media_csv' || fileType === 'site_summary_csv'
       ? normalizeCsvRows(body.csv_rows, body.csv_text)
       : []
 
-  if (fileType === 'ad_media_csv' && adMediaCsvRows.length === 0) {
+  if (
+    (fileType === 'ad_media_csv' || fileType === 'site_summary_csv') &&
+    csvRows.length === 0
+  ) {
     return c.json<ApiResponse<null>>(
-      { success: false, error: '広告媒体CSVの行データが送信されていません' },
+      { success: false, error: `${UPLOAD_FILE_TYPE_LABELS[fileType]}の行データが送信されていません` },
       400
     )
   }
@@ -448,60 +590,108 @@ uploadRoute.post('/', async (c) => {
     rowCount
   )
 
-  if (fileType === 'ad_media_csv') {
-    if (!uploadHistoryId) {
-      return c.json<ApiResponse<null>>(
-        { success: false, error: 'アップロード履歴IDを取得できませんでした' },
-        500
-      )
-    }
+  if (!uploadHistoryId) {
+    return c.json<ApiResponse<null>>(
+      { success: false, error: 'アップロード履歴IDを取得できませんでした' },
+      500
+    )
+  }
 
-    try {
+  let savedRows = 0
+
+  try {
+    if (fileType === 'ad_media_csv') {
+      await c.env.DB.prepare(
+        `DELETE FROM ad_media_daily WHERE upload_history_id = ?`
+      )
+        .bind(uploadHistoryId)
+        .run()
+
       const dailyRows = buildAdMediaDailyRows(
-        adMediaCsvRows,
+        csvRows,
         mediaId,
         uploadHistoryId
       )
 
-      if (dailyRows.length > 0) {
-        for (let i = 0; i < dailyRows.length; i += AD_MEDIA_DAILY_INSERT_BATCH_SIZE) {
-          const chunk = dailyRows.slice(i, i + AD_MEDIA_DAILY_INSERT_BATCH_SIZE)
-          await c.env.DB.batch(
-            chunk.map((row) =>
-              c.env.DB.prepare(
-                `INSERT INTO ad_media_daily
-                   (target_date, media_id, account_name, account_id,
-                    campaign_name, campaign_id, clicks, served_ads,
-                    impressions, spend, upload_history_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-              ).bind(
-                row.targetDate,
-                row.mediaId,
-                row.accountName,
-                row.accountId,
-                row.campaignName,
-                row.campaignId,
-                row.clicks,
-                row.servedAds,
-                row.impressions,
-                row.spend,
-                row.uploadHistoryId
-              )
+      savedRows = dailyRows.length
+      for (let i = 0; i < dailyRows.length; i += INSERT_BATCH_SIZE) {
+        const chunk = dailyRows.slice(i, i + INSERT_BATCH_SIZE)
+        await c.env.DB.batch(
+          chunk.map((row) =>
+            c.env.DB.prepare(
+              `INSERT INTO ad_media_daily
+                 (target_date, media_id, account_name, account_id,
+                  campaign_name, campaign_id, clicks, served_ads,
+                  impressions, spend, media_cv, upload_history_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).bind(
+              row.targetDate,
+              row.mediaId,
+              row.accountName,
+              row.accountId,
+              row.campaignName,
+              row.campaignId,
+              row.clicks,
+              row.servedAds,
+              row.impressions,
+              row.spend,
+              row.mediaCv,
+              row.uploadHistoryId
             )
           )
-        }
+        )
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : '広告媒体CSVの実績保存に失敗しました'
-      return c.json<ApiResponse<null>>(
-        { success: false, error: message },
-        400
-      )
     }
+
+    if (fileType === 'site_summary_csv') {
+      await c.env.DB.prepare(
+        `DELETE FROM media_summary_daily WHERE upload_history_id = ?`
+      )
+        .bind(uploadHistoryId)
+        .run()
+
+      const summaryRows = await buildMediaSummaryDailyRows(
+        c.env.DB,
+        csvRows,
+        uploadHistoryId
+      )
+
+      savedRows = summaryRows.length
+      for (let i = 0; i < summaryRows.length; i += INSERT_BATCH_SIZE) {
+        const chunk = summaryRows.slice(i, i + INSERT_BATCH_SIZE)
+        await c.env.DB.batch(
+          chunk.map((row) =>
+            c.env.DB.prepare(
+              `INSERT INTO media_summary_daily
+                 (target_date, media_id, ad_code, access_count,
+                  registration_count, provisional_registration_count,
+                  upload_history_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`
+            ).bind(
+              row.targetDate,
+              row.mediaId,
+              row.adCode,
+              row.accessCount,
+              row.registrationCount,
+              row.provisionalRegistrationCount,
+              row.uploadHistoryId
+            )
+          )
+        )
+      }
+    }
+  } catch (err) {
+    const message = err instanceof Error
+      ? err.message
+      : `${UPLOAD_FILE_TYPE_LABELS[fileType]}の明細保存に失敗しました`
+    return c.json<ApiResponse<null>>(
+      { success: false, error: message },
+      400
+    )
   }
 
-  return c.json<ApiResponse<{ id: number | null }>>({
+  return c.json<ApiResponse<{ id: number; saved_rows: number }>>({
     success: true,
-    data: { id: uploadHistoryId },
+    data: { id: uploadHistoryId, saved_rows: savedRows },
   })
 })

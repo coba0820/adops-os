@@ -1,9 +1,3 @@
-// ============================================================
-// 実績分析画面
-// v1.2では広告媒体CSV由来の指標を日付×媒体で表示する。
-// 今後、媒体集計CSV・決済レポートCSVの列を同じテーブルへ追加する。
-// ============================================================
-
 const SUMMARY_CARDS = [
   { key: 'cost', label: '広告費', icon: 'fa-yen-sign', format: formatCurrency },
   { key: 'impressions', label: 'Imp', icon: 'fa-eye', format: formatInteger },
@@ -11,6 +5,15 @@ const SUMMARY_CARDS = [
   { key: 'ctr', label: 'CTR', icon: 'fa-percent', format: formatPercent },
   { key: 'cpc', label: '平均CPC', icon: 'fa-hand-pointer', format: formatCurrencyNoDecimal },
   { key: 'cpm', label: '平均CPM', icon: 'fa-gauge-high', format: formatCurrencyNoDecimal },
+  { key: 'media_cv', label: '媒体CV', icon: 'fa-bullseye', format: formatInteger },
+  { key: 'media_cpa', label: '媒体CPA', icon: 'fa-coins', format: formatCurrencyNoDecimal },
+  { key: 'media_cvr', label: '媒体CVR', icon: 'fa-chart-simple', format: formatPercent },
+  { key: 'access_count', label: 'アクセス', icon: 'fa-users-viewfinder', format: formatInteger },
+  { key: 'registration_count', label: '登録', icon: 'fa-user-check', format: formatInteger },
+  { key: 'provisional_registration_count', label: '仮登録', icon: 'fa-user-clock', format: formatInteger },
+  { key: 'cpf', label: 'CPF', icon: 'fa-calculator', format: formatCurrencyNoDecimal },
+  { key: 'cpa', label: 'CPA', icon: 'fa-receipt', format: formatCurrencyNoDecimal },
+  { key: 'cvr', label: 'CVR', icon: 'fa-percent', format: formatPercent },
 ]
 
 const METRIC_COLUMNS = [
@@ -20,6 +23,15 @@ const METRIC_COLUMNS = [
   { key: 'ctr', label: 'CTR', format: formatPercent },
   { key: 'cpc', label: 'CPC', format: formatCurrencyNoDecimal },
   { key: 'cpm', label: 'CPM', format: formatCurrencyNoDecimal },
+  { key: 'media_cv', label: '媒体CV', format: formatInteger },
+  { key: 'media_cpa', label: '媒体CPA', format: formatCurrencyNoDecimal },
+  { key: 'media_cvr', label: '媒体CVR', format: formatPercent },
+  { key: 'access_count', label: 'アクセス', format: formatInteger },
+  { key: 'registration_count', label: '登録', format: formatInteger },
+  { key: 'provisional_registration_count', label: '仮登録', format: formatInteger },
+  { key: 'cpf', label: 'CPF', format: formatCurrencyNoDecimal },
+  { key: 'cpa', label: 'CPA', format: formatCurrencyNoDecimal },
+  { key: 'cvr', label: 'CVR', format: formatPercent },
 ]
 
 const GROUP_LABELS = {
@@ -28,10 +40,6 @@ const GROUP_LABELS = {
   monthly: '月別',
 }
 
-/**
- * 実績分析画面を描画する
- * @param {HTMLElement} container #main-content 要素
- */
 export async function renderAnalysisPage(container) {
   container.innerHTML = `<div class="empty-state">読み込み中...</div>`
 
@@ -51,7 +59,7 @@ export async function renderAnalysisPage(container) {
         <div class="card-header">
           <div>
             <div class="card-title"><i class="fa-solid fa-chart-line"></i>実績分析</div>
-            <div class="card-subtitle">広告媒体CSVの実績を期間×媒体で集計</div>
+            <div class="card-subtitle">広告媒体CSVと媒体集計CSVの実績を期間別・媒体別・広告コード別に集計します</div>
           </div>
         </div>
         ${renderFilters(state, mediaList, adCodeList)}
@@ -172,7 +180,7 @@ function renderSummaryCards(summary) {
     (card) => `
       <div class="analysis-summary-card">
         <div class="analysis-summary-label"><i class="fa-solid ${card.icon}"></i>${card.label}</div>
-        <div class="analysis-summary-value">${card.format(summary[card.key] || 0)}</div>
+        <div class="analysis-summary-value">${card.format(summary?.[card.key])}</div>
       </div>
     `
   ).join('')
@@ -195,10 +203,10 @@ function renderAnalysisTable(summary, rows, groupBy) {
         <div class="card-header">
           <div>
             <div class="card-title"><i class="fa-solid fa-table"></i>${groupLabel}実績</div>
-            <div class="card-subtitle">条件に一致する広告媒体CSV実績がありません</div>
+            <div class="card-subtitle">条件に一致する実績がありません</div>
           </div>
         </div>
-        <div class="empty-state">データ取込画面から広告媒体CSVを取り込んでください</div>
+        <div class="empty-state">データ取込画面からCSVを取込んでください</div>
       </div>
     `
   }
@@ -217,7 +225,7 @@ function renderAnalysisTable(summary, rows, groupBy) {
       <div class="card-header">
         <div>
           <div class="card-title"><i class="fa-solid fa-table"></i>${groupLabel}実績</div>
-          <div class="card-subtitle">期間昇順・媒体名順</div>
+          <div class="card-subtitle">期間昇順・媒体名順・広告コード順</div>
         </div>
       </div>
       <div class="table-scroll">
@@ -244,9 +252,9 @@ function renderTableRow(row, isTotal, groupBy) {
   return `
     <tr class="${isTotal ? 'analysis-total-row' : ''}">
       <td>${escapeHtml(isTotal ? row.period : formatPeriod(row, groupBy))}</td>
-      <td>${escapeHtml(row.media_name || '-')}</td>
+      <td>${escapeHtml(isTotal ? '-' : row.media_name || '未設定')}</td>
       <td>${escapeHtml(isTotal ? '-' : row.ad_code || '未設定')}</td>
-      ${METRIC_COLUMNS.map((column) => `<td class="text-right">${column.format(row[column.key] || 0)}</td>`).join('')}
+      ${METRIC_COLUMNS.map((column) => `<td class="text-right">${column.format(row[column.key])}</td>`).join('')}
     </tr>
   `
 }
@@ -287,20 +295,28 @@ async function fetchAdCodeList() {
   }
 }
 
+function isDisplayableNumber(value) {
+  return value !== null && value !== undefined && Number.isFinite(Number(value))
+}
+
 function formatCurrency(value) {
-  return '¥' + Math.round(Number(value || 0)).toLocaleString('ja-JP')
+  if (!isDisplayableNumber(value)) return '-'
+  return '¥' + Math.round(Number(value)).toLocaleString('ja-JP')
 }
 
 function formatCurrencyNoDecimal(value) {
-  return '¥' + Math.round(Number(value || 0)).toLocaleString('ja-JP')
+  if (!isDisplayableNumber(value)) return '-'
+  return '¥' + Math.round(Number(value)).toLocaleString('ja-JP')
 }
 
 function formatInteger(value) {
-  return Math.round(Number(value || 0)).toLocaleString('ja-JP')
+  if (!isDisplayableNumber(value)) return '-'
+  return Math.round(Number(value)).toLocaleString('ja-JP')
 }
 
 function formatPercent(value) {
-  return `${(Number(value || 0) * 100).toFixed(2)}%`
+  if (!isDisplayableNumber(value)) return '-'
+  return `${(Number(value) * 100).toFixed(2)}%`
 }
 
 function formatSlashDate(value) {

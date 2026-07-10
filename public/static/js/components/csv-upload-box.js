@@ -126,11 +126,13 @@ export function mountCsvUploadBox(rootEl, options) {
           media_id: showMediaSelect && mediaSelect ? Number(mediaSelect.value) : null,
           file_name: file.name,
           row_count: rowCount,
-          csv_rows: fileType === 'ad_media_csv' ? rows : undefined,
-          csv_text: fileType === 'ad_media_csv' ? text : undefined,
+          csv_rows: shouldSendCsvRows(fileType) ? rows : undefined,
+          csv_text: shouldSendCsvRows(fileType) ? text : undefined,
         })
         if (fileType === 'ad_media_csv') {
           showToast('広告媒体CSVの実績を保存しました', 'success')
+        } else if (fileType === 'site_summary_csv') {
+          showToast('媒体集計CSVの実績を保存しました', 'success')
         } else {
           showToast(`「${file.name}」を取込みました（${rowCount}行）`, 'success')
         }
@@ -146,6 +148,10 @@ export function mountCsvUploadBox(rootEl, options) {
     }
     reader.readAsText(file, 'UTF-8')
   }
+}
+
+function shouldSendCsvRows(fileType) {
+  return fileType === 'ad_media_csv' || fileType === 'site_summary_csv'
 }
 
 /**
