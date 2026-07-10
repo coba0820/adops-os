@@ -70,13 +70,13 @@ const AD_MEDIA_HEADERS: Record<string, HeaderDefinition> = {
 }
 
 const MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
-  date: { label: '日付', aliases: ['日付', 'Date', '年月日'] },
-  adCode: { label: '広告コード', aliases: ['広告コード', 'Ad Code', 'ad_code', 'Campaign ID'] },
-  accessCount: { label: 'アクセス数', aliases: ['アクセス数', 'アクセス', 'Access', 'access_count'] },
-  registrationCount: { label: '登録者数', aliases: ['登録者数', '登録', 'Registration', 'Registrations', 'registration_count'] },
+  date: { label: '日付', aliases: ['日付', 'Date', 'date', '年月日', '対象日', '集計日'] },
+  adCode: { label: '広告コード', aliases: ['広告コード', '広告CD', '広告コード名', 'Ad Code', 'ad_code', 'Campaign ID', 'campaign_id'] },
+  accessCount: { label: 'アクセス数', aliases: ['アクセス数', 'アクセス', 'Access', 'access', 'access_count', '流入数'] },
+  registrationCount: { label: '登録者数', aliases: ['登録者数', '登録数', '登録', 'Registration', 'Registrations', 'registration', 'registration_count'] },
   provisionalRegistrationCount: {
     label: '仮登録者数',
-    aliases: ['仮登録者数', '仮登録数', '仮登録', 'Provisional Registration', 'Provisional Registrations', 'provisional_registration_count'],
+    aliases: ['仮登録者数', '仮登録数', '仮登録', 'Provisional Registration', 'Provisional Registrations', 'provisional_registration', 'provisional_registration_count'],
   },
 }
 
@@ -366,6 +366,13 @@ async function buildMediaSummaryDailyRows(
   }
 
   const headerIndex = buildHeaderIndex(headerRow)
+  logUploadInfo('buildMediaSummaryDailyRows called', {
+    csvRows: rows.length,
+    bodyRows: countBodyRows(rows),
+    headers: headerRow,
+    normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
+  })
+
   ensureHeaders(headerIndex, [
     MEDIA_SUMMARY_HEADERS.date,
     MEDIA_SUMMARY_HEADERS.adCode,
@@ -400,10 +407,18 @@ async function buildMediaSummaryDailyRows(
     parsedRows.map((row) => row.adCode)
   )
 
-  return parsedRows.map((row): MediaSummaryDailyRow => ({
+  const summaryRows = parsedRows.map((row): MediaSummaryDailyRow => ({
     ...row,
     mediaId: mediaIdsByAdCode.get(row.adCode) ?? null,
   }))
+
+  logUploadInfo('buildMediaSummaryDailyRows completed', {
+    builtRows: summaryRows.length,
+    linkedMediaRows: summaryRows.filter((row) => row.mediaId !== null).length,
+    unlinkedMediaRows: summaryRows.filter((row) => row.mediaId === null).length,
+  })
+
+  return summaryRows
 }
 
 uploadRoute.get('/', async (c) => {
@@ -604,6 +619,57 @@ uploadRoute.post('/', async (c) => {
     )
   }
 
+  let preparedAdMediaRows: AdMediaDailyRow[] = []
+  let preparedMediaSummaryRows: MediaSummaryDailyRow[] = []
+
+  try {
+    if (fileType === 'ad_media_csv') {
+      preparedAdMediaRows = buildAdMediaDailyRows(
+        csvRows,
+        mediaId,
+        0
+      )
+
+      logUploadInfo('ad_media_daily prepared rows', {
+        preparedRows: preparedAdMediaRows.length,
+      })
+
+      if (preparedAdMediaRows.length === 0) {
+        throw new Error('広告媒体CSVに保存対象の明細行がありません')
+      }
+    }
+
+    if (fileType === 'site_summary_csv') {
+      preparedMediaSummaryRows = await buildMediaSummaryDailyRows(
+        c.env.DB,
+        csvRows,
+        0
+      )
+
+      logUploadInfo('media_summary_daily prepared rows', {
+        preparedRows: preparedMediaSummaryRows.length,
+        linkedMediaRows: preparedMediaSummaryRows.filter((row) => row.mediaId !== null).length,
+        unlinkedMediaRows: preparedMediaSummaryRows.filter((row) => row.mediaId === null).length,
+      })
+
+      if (preparedMediaSummaryRows.length === 0) {
+        throw new Error('媒体集計CSVに保存対象の明細行がありません')
+      }
+    }
+  } catch (err) {
+    logUploadError('detail preparation failed before upload_history insert', {
+      fileType,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    const message = err instanceof Error
+      ? err.message
+      : `${UPLOAD_FILE_TYPE_LABELS[fileType]}の明細解析に失敗しました`
+    return c.json<ApiResponse<null>>(
+      { success: false, error: message },
+      400
+    )
+  }
+
   const result = await c.env.DB.prepare(
     `INSERT INTO upload_history
        (file_type, media_id, file_name, row_count, target_date, status)
@@ -643,13 +709,7 @@ uploadRoute.post('/', async (c) => {
         .bind(uploadHistoryId)
         .run()
 
-      const dailyRows = buildAdMediaDailyRows(
-        csvRows,
-        mediaId,
-        uploadHistoryId
-      )
-
-      savedRows = dailyRows.length
+      savedRows = preparedAdMediaRows.length
       logUploadInfo('ad_media_daily insert target rows', {
         uploadHistoryId,
         savedRows,
@@ -659,8 +719,8 @@ uploadRoute.post('/', async (c) => {
         throw new Error('広告媒体CSVに保存対象の明細行がありません')
       }
 
-      for (let i = 0; i < dailyRows.length; i += INSERT_BATCH_SIZE) {
-        const chunk = dailyRows.slice(i, i + INSERT_BATCH_SIZE)
+      for (let i = 0; i < preparedAdMediaRows.length; i += INSERT_BATCH_SIZE) {
+        const chunk = preparedAdMediaRows.slice(i, i + INSERT_BATCH_SIZE)
         await c.env.DB.batch(
           chunk.map((row) =>
             c.env.DB.prepare(
@@ -681,7 +741,7 @@ uploadRoute.post('/', async (c) => {
               row.impressions,
               row.spend,
               row.mediaCv,
-              row.uploadHistoryId
+              uploadHistoryId
             )
           )
         )
@@ -699,26 +759,20 @@ uploadRoute.post('/', async (c) => {
         .bind(uploadHistoryId)
         .run()
 
-      const summaryRows = await buildMediaSummaryDailyRows(
-        c.env.DB,
-        csvRows,
-        uploadHistoryId
-      )
-
-      savedRows = summaryRows.length
+      savedRows = preparedMediaSummaryRows.length
       logUploadInfo('media_summary_daily insert target rows', {
         uploadHistoryId,
         savedRows,
-        linkedMediaRows: summaryRows.filter((row) => row.mediaId !== null).length,
-        unlinkedMediaRows: summaryRows.filter((row) => row.mediaId === null).length,
+        linkedMediaRows: preparedMediaSummaryRows.filter((row) => row.mediaId !== null).length,
+        unlinkedMediaRows: preparedMediaSummaryRows.filter((row) => row.mediaId === null).length,
       })
 
       if (savedRows === 0) {
         throw new Error('媒体集計CSVに保存対象の明細行がありません')
       }
 
-      for (let i = 0; i < summaryRows.length; i += INSERT_BATCH_SIZE) {
-        const chunk = summaryRows.slice(i, i + INSERT_BATCH_SIZE)
+      for (let i = 0; i < preparedMediaSummaryRows.length; i += INSERT_BATCH_SIZE) {
+        const chunk = preparedMediaSummaryRows.slice(i, i + INSERT_BATCH_SIZE)
         await c.env.DB.batch(
           chunk.map((row) =>
             c.env.DB.prepare(
@@ -734,7 +788,7 @@ uploadRoute.post('/', async (c) => {
               row.accessCount,
               row.registrationCount,
               row.provisionalRegistrationCount,
-              row.uploadHistoryId
+              uploadHistoryId
             )
           )
         )
