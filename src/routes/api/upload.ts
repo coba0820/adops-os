@@ -66,7 +66,28 @@ const AD_MEDIA_HEADERS: Record<string, HeaderDefinition> = {
   servedAds: { label: 'Served Ads', aliases: ['Served Ads', '配信数'] },
   impressions: { label: 'Impressions', aliases: ['Impressions', 'Imp', 'インプレッション', '表示回数'] },
   spend: { label: 'Spent', aliases: ['Spent', 'Spend', 'Cost', '費用', '広告費'] },
-  mediaCv: { label: '媒体CV', aliases: ['媒体CV', 'CV', 'Conversions', 'Conversion', 'コンバージョン', 'コンバージョン数'] },
+  mediaCv: {
+    label: '媒体CV',
+    aliases: [
+      '媒体CV',
+      'CV',
+      'CV数',
+      'CVs',
+      'CV Count',
+      'Conversions',
+      'Conversion',
+      'Total Conversions',
+      'Website Conversions',
+      'コンバージョン',
+      'コンバージョン数',
+      '成果',
+      '成果数',
+      '獲得',
+      '獲得数',
+      'Results',
+      '結果',
+    ],
+  },
 }
 
 const MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
@@ -176,6 +197,47 @@ function getCellByAliases(row: string[], headerIndex: Map<string, number>, alias
   return ''
 }
 
+function findHeaderIndex(headerRow: string[], aliases: string[]) {
+  const normalizedAliases = new Set(aliases.map((alias) => normalizeHeader(alias)))
+  return headerRow.findIndex((header) => normalizedAliases.has(normalizeHeader(header)))
+}
+
+function compactHeader(header: unknown) {
+  return normalizeHeader(header)
+    .replace(/[\s_＿\-－()\[\]（）［］{}｛｝:：\/／・.．]/g, '')
+}
+
+function findMediaCvHeaderIndex(headerRow: string[]) {
+  const exactIndex = findHeaderIndex(headerRow, AD_MEDIA_HEADERS.mediaCv.aliases)
+  if (exactIndex !== -1) return exactIndex
+
+  return headerRow.findIndex((header) => {
+    const compact = compactHeader(header)
+    if (!compact) return false
+    if (compact.includes('cvr') || compact.includes('cpc') || compact.includes('cpm')) return false
+    if (compact.includes('率') || compact.includes('rate') || compact.includes('単価')) return false
+    if (compact === 'cv' || compact === 'cvs' || compact === 'cv数') return true
+    if (compact.includes('媒体cv')) return true
+    if (compact.includes('コンバージョン')) return true
+    if (compact === '成果' || compact === '成果数') return true
+    if (compact === '獲得' || compact === '獲得数') return true
+    if (compact === 'results' || compact === 'result') return true
+    return false
+  })
+}
+
+function getMediaCvCell(row: string[], headerRow: string[]) {
+  const index = findMediaCvHeaderIndex(headerRow)
+  if (index === -1) return ''
+  return String(row[index] ?? '').trim()
+}
+
+function getMediaCvHeaderName(headerRow: string[]) {
+  const index = findMediaCvHeaderIndex(headerRow)
+  if (index === -1) return null
+  return headerRow[index] ?? null
+}
+
 function ensureHeaders(headerIndex: Map<string, number>, definitions: HeaderDefinition[]) {
   const missingHeaders = definitions
     .filter((definition) => !hasHeader(headerIndex, definition.aliases))
@@ -222,7 +284,9 @@ async function resolveUploadHistoryId(
 }
 
 function parseInteger(value: unknown) {
-  const normalized = String(value ?? '').replace(/[,\s]/g, '')
+  const normalized = String(value ?? '')
+    .replace(/[,\s]/g, '')
+    .replace(/[^\d.-]/g, '')
   if (normalized === '') return 0
   const number = Number(normalized)
   if (!Number.isFinite(number)) return 0
@@ -298,6 +362,15 @@ function buildAdMediaDailyRows(rows: CsvRows, mediaId: number, uploadHistoryId: 
     AD_MEDIA_HEADERS.spend,
   ])
 
+  const mediaCvHeader = getMediaCvHeaderName(headerRow)
+  logUploadInfo('buildAdMediaDailyRows called', {
+    csvRows: rows.length,
+    bodyRows: countBodyRows(rows),
+    headers: headerRow,
+    normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
+    mediaCvHeader,
+  })
+
   return bodyRows.filter((row) => !isBlankRow(row)).map((row, index): AdMediaDailyRow => {
     const targetDate = parseTargetDate(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.date.aliases))
     if (!targetDate) {
@@ -315,7 +388,7 @@ function buildAdMediaDailyRows(rows: CsvRows, mediaId: number, uploadHistoryId: 
       servedAds: parseInteger(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.servedAds.aliases)),
       impressions: parseInteger(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.impressions.aliases)),
       spend: parseMoney(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.spend.aliases)),
-      mediaCv: parseInteger(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.mediaCv.aliases)),
+      mediaCv: parseInteger(getMediaCvCell(row, headerRow)),
       uploadHistoryId,
     }
   })
