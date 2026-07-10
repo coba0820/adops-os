@@ -45,10 +45,11 @@ export async function renderAnalysisPage(container) {
 
   const mediaList = await fetchMediaList()
   const adCodeList = await fetchAdCodeList()
+  const defaultDateRange = getDefaultDateRange()
   const state = {
     groupBy: 'daily',
-    startDate: '',
-    endDate: '',
+    startDate: defaultDateRange.startDate,
+    endDate: defaultDateRange.endDate,
     mediaId: '',
     adCode: '',
   }
@@ -166,9 +167,10 @@ function bindFilterEvents(container, state, redraw) {
   })
 
   container.querySelector('#analysis-filter-reset')?.addEventListener('click', () => {
+    const defaultDateRange = getDefaultDateRange()
     state.groupBy = 'daily'
-    state.startDate = ''
-    state.endDate = ''
+    state.startDate = defaultDateRange.startDate
+    state.endDate = defaultDateRange.endDate
     state.mediaId = ''
     state.adCode = ''
     redraw()
@@ -297,6 +299,24 @@ async function fetchAdCodeList() {
 
 function isDisplayableNumber(value) {
   return value !== null && value !== undefined && Number.isFinite(Number(value))
+}
+
+function getDefaultDateRange() {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(end.getDate() - 29)
+
+  return {
+    startDate: formatInputDate(start),
+    endDate: formatInputDate(end),
+  }
+}
+
+function formatInputDate(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function formatCurrency(value) {

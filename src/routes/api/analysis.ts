@@ -323,66 +323,139 @@ analysisRoute.get('/summary', async (c) => {
   const adWhere = buildAdMediaWhere(filters)
   const mediaSummaryWhere = buildMediaSummaryWhere(filters)
 
-  const adDetailSql = `
-    SELECT
-      ${adPeriodSql.period} AS period,
-      ${adPeriodSql.periodStart} AS period_start,
-      ${adPeriodSql.periodEnd} AS period_end,
-      d.media_id,
-      COALESCE(m.media_name, '') AS media_name,
-      (
-        SELECT c.ad_code
-        FROM campaign_master c
-        WHERE c.media_id = d.media_id
-          AND (
-            c.campaign_name = d.campaign_name
-            OR c.ad_code = d.campaign_id
-          )
-        ORDER BY c.id ASC
-        LIMIT 1
-      ) AS ad_code,
-      SUM(d.spend) AS cost,
-      SUM(d.impressions) AS impressions,
-      SUM(d.clicks) AS clicks,
-      SUM(COALESCE(d.media_cv, 0)) AS media_cv
-    FROM ad_media_daily d
-    LEFT JOIN media_master m ON d.media_id = m.id
-    ${adWhere.whereSql}
-    GROUP BY period, period_start, period_end, d.media_id, m.media_name, ad_code
+  const detailSql = `
+    WITH
+    ad_base AS (
+      SELECT
+        ${adPeriodSql.period} AS period,
+        ${adPeriodSql.periodStart} AS period_start,
+        ${adPeriodSql.periodEnd} AS period_end,
+        d.media_id,
+        COALESCE(m.media_name, '') AS media_name,
+        (
+          SELECT c.ad_code
+          FROM campaign_master c
+          WHERE c.media_id = d.media_id
+            AND (
+              c.campaign_name = d.campaign_name
+              OR c.ad_code = d.campaign_id
+            )
+          ORDER BY c.id ASC
+          LIMIT 1
+        ) AS ad_code,
+        d.spend,
+        d.impressions,
+        d.clicks,
+        COALESCE(d.media_cv, 0) AS media_cv
+      FROM ad_media_daily d
+      LEFT JOIN media_master m ON d.media_id = m.id
+      ${adWhere.whereSql}
+    ),
+    ad_agg AS (
+      SELECT
+        period,
+        period_start,
+        period_end,
+        media_id,
+        media_name,
+        ad_code,
+        SUM(spend) AS cost,
+        SUM(impressions) AS impressions,
+        SUM(clicks) AS clicks,
+        SUM(media_cv) AS media_cv
+      FROM ad_base
+      GROUP BY period, period_start, period_end, media_id, media_name, ad_code
+    ),
+    summary_agg AS (
+      SELECT
+        ${summaryPeriodSql.period} AS period,
+        ${summaryPeriodSql.periodStart} AS period_start,
+        ${summaryPeriodSql.periodEnd} AS period_end,
+        s.media_id,
+        COALESCE(m.media_name, '') AS media_name,
+        NULLIF(TRIM(s.ad_code), '') AS ad_code,
+        SUM(s.access_count) AS access_count,
+        SUM(s.registration_count) AS registration_count,
+        SUM(s.provisional_registration_count) AS provisional_registration_count
+      FROM media_summary_daily s
+      LEFT JOIN media_master m ON s.media_id = m.id
+      ${mediaSummaryWhere.whereSql}
+      GROUP BY period, period_start, period_end, s.media_id, m.media_name, ad_code
+    ),
+    joined AS (
+      SELECT
+        COALESCE(a.period, s.period) AS period,
+        COALESCE(a.period_start, s.period_start) AS period_start,
+        COALESCE(a.period_end, s.period_end) AS period_end,
+        COALESCE(a.media_id, s.media_id) AS media_id,
+        COALESCE(a.media_name, s.media_name, '') AS media_name,
+        COALESCE(a.ad_code, s.ad_code) AS ad_code,
+        COALESCE(a.cost, 0) AS cost,
+        COALESCE(a.impressions, 0) AS impressions,
+        COALESCE(a.clicks, 0) AS clicks,
+        COALESCE(a.media_cv, 0) AS media_cv,
+        COALESCE(s.access_count, 0) AS access_count,
+        COALESCE(s.registration_count, 0) AS registration_count,
+        COALESCE(s.provisional_registration_count, 0) AS provisional_registration_count
+      FROM ad_agg a
+      LEFT JOIN summary_agg s
+        ON a.period_start = s.period_start
+       AND a.period_end = s.period_end
+       AND COALESCE(a.media_id, -1) = COALESCE(s.media_id, -1)
+       AND COALESCE(a.ad_code, '') = COALESCE(s.ad_code, '')
+
+      UNION ALL
+
+      SELECT
+        s.period,
+        s.period_start,
+        s.period_end,
+        s.media_id,
+        s.media_name,
+        s.ad_code,
+        0 AS cost,
+        0 AS impressions,
+        0 AS clicks,
+        0 AS media_cv,
+        COALESCE(s.access_count, 0) AS access_count,
+        COALESCE(s.registration_count, 0) AS registration_count,
+        COALESCE(s.provisional_registration_count, 0) AS provisional_registration_count
+      FROM summary_agg s
+      LEFT JOIN ad_agg a
+        ON a.period_start = s.period_start
+       AND a.period_end = s.period_end
+       AND COALESCE(a.media_id, -1) = COALESCE(s.media_id, -1)
+       AND COALESCE(a.ad_code, '') = COALESCE(s.ad_code, '')
+      WHERE a.period_start IS NULL
+    )
+    SELECT *
+    FROM joined
+    ORDER BY period_start ASC, media_name ASC, ad_code ASC
   `
 
-  const mediaSummarySql = `
-    SELECT
-      ${summaryPeriodSql.period} AS period,
-      ${summaryPeriodSql.periodStart} AS period_start,
-      ${summaryPeriodSql.periodEnd} AS period_end,
-      s.media_id,
-      COALESCE(m.media_name, '') AS media_name,
-      NULLIF(TRIM(s.ad_code), '') AS ad_code,
-      SUM(s.access_count) AS access_count,
-      SUM(s.registration_count) AS registration_count,
-      SUM(s.provisional_registration_count) AS provisional_registration_count
-    FROM media_summary_daily s
-    LEFT JOIN media_master m ON s.media_id = m.id
-    ${mediaSummaryWhere.whereSql}
-    GROUP BY period, period_start, period_end, s.media_id, m.media_name, ad_code
-  `
+  const { results } = await prepareWithBindings(
+    c.env.DB,
+    detailSql,
+    [...adWhere.bindings, ...mediaSummaryWhere.bindings]
+  ).all<AggregateRow>()
 
-  const [{ results: adRows }, { results: mediaSummaryRows }] = await Promise.all([
-    prepareWithBindings(c.env.DB, adDetailSql, adWhere.bindings).all<AggregateRow>(),
-    prepareWithBindings(c.env.DB, mediaSummarySql, mediaSummaryWhere.bindings).all<AggregateRow>(),
-  ])
-
-  const rowsByKey = new Map<string, AnalysisRow>()
-
-  for (const aggregate of [...adRows, ...mediaSummaryRows]) {
-    const key = rowKey(aggregate)
-    const row = rowsByKey.get(key) ?? createEmptyRow(aggregate)
-    applyMetrics(row, aggregate)
-    rowsByKey.set(key, row)
-  }
-
-  const rows = sortRows([...rowsByKey.values()])
+  const rows = results.map((row) => ({
+    period: row.period,
+    period_start: row.period_start,
+    period_end: row.period_end,
+    media_id: row.media_id,
+    media_name: row.media_name,
+    ad_code: row.ad_code,
+    ...buildMetrics({
+      cost: toNumber(row.cost),
+      impressions: toNumber(row.impressions),
+      clicks: toNumber(row.clicks),
+      mediaCv: toNumber(row.media_cv),
+      accessCount: toNumber(row.access_count),
+      registrationCount: toNumber(row.registration_count),
+      provisionalRegistrationCount: toNumber(row.provisional_registration_count),
+    }),
+  }))
   const summary = buildSummary(rows)
 
   return c.json<ApiResponse<AnalysisResponse>>({

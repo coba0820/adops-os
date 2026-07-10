@@ -343,6 +343,108 @@ function logUploadError(message: string, details: Record<string, unknown>) {
   console.error(`[api/upload] ${message}`, details)
 }
 
+function aggregateAdMediaRows(rows: AdMediaDailyRow[]) {
+  const rowsByKey = new Map<string, AdMediaDailyRow>()
+
+  for (const row of rows) {
+    const key = [
+      row.targetDate,
+      row.mediaId,
+      row.campaignId || '',
+    ].join('|')
+    const current = rowsByKey.get(key)
+
+    if (!current) {
+      rowsByKey.set(key, { ...row })
+      continue
+    }
+
+    current.clicks += row.clicks
+    current.servedAds += row.servedAds
+    current.impressions += row.impressions
+    current.spend += row.spend
+    current.mediaCv += row.mediaCv
+    current.accountName = row.accountName || current.accountName
+    current.accountId = row.accountId || current.accountId
+    current.campaignName = row.campaignName || current.campaignName
+  }
+
+  return [...rowsByKey.values()]
+}
+
+function aggregateMediaSummaryRows(rows: MediaSummaryDailyRow[]) {
+  const rowsByKey = new Map<string, MediaSummaryDailyRow>()
+
+  for (const row of rows) {
+    const key = [
+      row.targetDate,
+      row.mediaId ?? 'null',
+      row.adCode || '',
+    ].join('|')
+    const current = rowsByKey.get(key)
+
+    if (!current) {
+      rowsByKey.set(key, { ...row })
+      continue
+    }
+
+    current.accessCount += row.accessCount
+    current.registrationCount += row.registrationCount
+    current.provisionalRegistrationCount += row.provisionalRegistrationCount
+  }
+
+  return [...rowsByKey.values()]
+}
+
+function buildOrWhere(
+  rows: number,
+  condition: string
+) {
+  return Array.from({ length: rows }, () => `(${condition})`).join(' OR ')
+}
+
+async function deleteExistingAdMediaRows(db: D1Database, rows: AdMediaDailyRow[]) {
+  for (let i = 0; i < rows.length; i += INSERT_BATCH_SIZE) {
+    const chunk = rows.slice(i, i + INSERT_BATCH_SIZE)
+    if (chunk.length === 0) continue
+
+    const whereSql = buildOrWhere(
+      chunk.length,
+      "target_date = ? AND media_id = ? AND COALESCE(campaign_id, '') = ?"
+    )
+    const bindings = chunk.flatMap((row) => [
+      row.targetDate,
+      row.mediaId,
+      row.campaignId || '',
+    ])
+
+    await db.prepare(`DELETE FROM ad_media_daily WHERE ${whereSql}`)
+      .bind(...bindings)
+      .run()
+  }
+}
+
+async function deleteExistingMediaSummaryRows(db: D1Database, rows: MediaSummaryDailyRow[]) {
+  for (let i = 0; i < rows.length; i += INSERT_BATCH_SIZE) {
+    const chunk = rows.slice(i, i + INSERT_BATCH_SIZE)
+    if (chunk.length === 0) continue
+
+    const whereSql = buildOrWhere(
+      chunk.length,
+      "target_date = ? AND COALESCE(media_id, -1) = ? AND COALESCE(ad_code, '') = ?"
+    )
+    const bindings = chunk.flatMap((row) => [
+      row.targetDate,
+      row.mediaId ?? -1,
+      row.adCode || '',
+    ])
+
+    await db.prepare(`DELETE FROM media_summary_daily WHERE ${whereSql}`)
+      .bind(...bindings)
+      .run()
+  }
+}
+
 function buildAdMediaDailyRows(rows: CsvRows, mediaId: number, uploadHistoryId: number) {
   const [headerRow, ...bodyRows] = rows
   if (!headerRow || headerRow.length === 0) {
@@ -700,10 +802,12 @@ uploadRoute.post('/', async (c) => {
 
   try {
     if (fileType === 'ad_media_csv') {
-      preparedAdMediaRows = buildAdMediaDailyRows(
-        csvRows,
-        mediaId,
-        0
+      preparedAdMediaRows = aggregateAdMediaRows(
+        buildAdMediaDailyRows(
+          csvRows,
+          mediaId,
+          0
+        )
       )
 
       logUploadInfo('ad_media_daily prepared rows', {
@@ -716,10 +820,12 @@ uploadRoute.post('/', async (c) => {
     }
 
     if (fileType === 'site_summary_csv') {
-      preparedMediaSummaryRows = await buildMediaSummaryDailyRows(
-        c.env.DB,
-        csvRows,
-        0
+      preparedMediaSummaryRows = aggregateMediaSummaryRows(
+        await buildMediaSummaryDailyRows(
+          c.env.DB,
+          csvRows,
+          0
+        )
       )
 
       logUploadInfo('media_summary_daily prepared rows', {
@@ -779,11 +885,7 @@ uploadRoute.post('/', async (c) => {
 
   try {
     if (fileType === 'ad_media_csv') {
-      await c.env.DB.prepare(
-        `DELETE FROM ad_media_daily WHERE upload_history_id = ?`
-      )
-        .bind(uploadHistoryId)
-        .run()
+      await deleteExistingAdMediaRows(c.env.DB, preparedAdMediaRows)
 
       savedRows = preparedAdMediaRows.length
       logUploadInfo('ad_media_daily insert target rows', {
@@ -829,11 +931,7 @@ uploadRoute.post('/', async (c) => {
     }
 
     if (fileType === 'site_summary_csv') {
-      await c.env.DB.prepare(
-        `DELETE FROM media_summary_daily WHERE upload_history_id = ?`
-      )
-        .bind(uploadHistoryId)
-        .run()
+      await deleteExistingMediaSummaryRows(c.env.DB, preparedMediaSummaryRows)
 
       savedRows = preparedMediaSummaryRows.length
       logUploadInfo('media_summary_daily insert target rows', {
