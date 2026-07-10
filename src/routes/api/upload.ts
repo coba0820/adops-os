@@ -62,6 +62,11 @@ type HeaderDefinition = {
   aliases: string[]
 }
 
+type TargetDateRange = {
+  minDate: string
+  maxDate: string
+}
+
 const AD_MEDIA_HEADERS: Record<string, HeaderDefinition> = {
   date: { label: 'Date', aliases: ['Date', '日付', '年月日'] },
   accountName: { label: 'Account Name', aliases: ['Account Name', 'アカウント名'] },
@@ -400,6 +405,91 @@ function aggregateMediaSummaryRows(rows: MediaSummaryDailyRow[]) {
   }
 
   return [...rowsByKey.values()]
+}
+
+function getTargetDateRange(rows: Array<{ targetDate: string }>): TargetDateRange {
+  if (rows.length === 0) {
+    throw new Error('保存対象の明細行がありません')
+  }
+
+  return rows.reduce<TargetDateRange>(
+    (range, row) => ({
+      minDate: row.targetDate < range.minDate ? row.targetDate : range.minDate,
+      maxDate: row.targetDate > range.maxDate ? row.targetDate : range.maxDate,
+    }),
+    {
+      minDate: rows[0].targetDate,
+      maxDate: rows[0].targetDate,
+    }
+  )
+}
+
+function uniqueNumbers(values: Array<number | null>) {
+  return [...new Set(values.filter((value): value is number => value !== null))]
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
+}
+
+async function deleteOldAdMediaRowsInRange(
+  db: D1Database,
+  mediaId: number,
+  range: TargetDateRange,
+  uploadHistoryId: number
+) {
+  await db.prepare(
+    `DELETE FROM ad_media_daily
+     WHERE media_id = ?
+       AND target_date BETWEEN ? AND ?
+       AND upload_history_id <> ?`
+  )
+    .bind(mediaId, range.minDate, range.maxDate, uploadHistoryId)
+    .run()
+}
+
+async function deleteOldMediaSummaryRowsInRange(
+  db: D1Database,
+  rows: MediaSummaryDailyRow[],
+  range: TargetDateRange,
+  uploadHistoryId: number
+) {
+  const mediaIds = uniqueNumbers(rows.map((row) => row.mediaId))
+  for (let i = 0; i < mediaIds.length; i += LOOKUP_BATCH_SIZE) {
+    const chunk = mediaIds.slice(i, i + LOOKUP_BATCH_SIZE)
+    if (chunk.length === 0) continue
+
+    const placeholders = chunk.map(() => '?').join(', ')
+    await db.prepare(
+      `DELETE FROM media_summary_daily
+       WHERE target_date BETWEEN ? AND ?
+         AND media_id IN (${placeholders})
+         AND upload_history_id <> ?`
+    )
+      .bind(range.minDate, range.maxDate, ...chunk, uploadHistoryId)
+      .run()
+  }
+
+  const unlinkedAdCodes = uniqueStrings(
+    rows
+      .filter((row) => row.mediaId === null)
+      .map((row) => row.adCode)
+  )
+  for (let i = 0; i < unlinkedAdCodes.length; i += LOOKUP_BATCH_SIZE) {
+    const chunk = unlinkedAdCodes.slice(i, i + LOOKUP_BATCH_SIZE)
+    if (chunk.length === 0) continue
+
+    const placeholders = chunk.map(() => '?').join(', ')
+    await db.prepare(
+      `DELETE FROM media_summary_daily
+       WHERE target_date BETWEEN ? AND ?
+         AND media_id IS NULL
+         AND ad_code IN (${placeholders})
+         AND upload_history_id <> ?`
+    )
+      .bind(range.minDate, range.maxDate, ...chunk, uploadHistoryId)
+      .run()
+  }
 }
 
 function buildAdMediaDailyRows(rows: CsvRows, mediaId: number, uploadHistoryId: number) {
@@ -824,6 +914,8 @@ uploadRoute.post('/', async (c) => {
 
   let preparedAdMediaRows: AdMediaDailyRow[] = []
   let preparedMediaSummaryRows: MediaSummaryDailyRow[] = []
+  let adMediaDateRange: TargetDateRange | null = null
+  let mediaSummaryDateRange: TargetDateRange | null = null
 
   try {
     if (fileType === 'ad_media_csv') {
@@ -834,9 +926,12 @@ uploadRoute.post('/', async (c) => {
           0
         )
       )
+      adMediaDateRange = getTargetDateRange(preparedAdMediaRows)
 
       logUploadInfo('ad_media_daily prepared rows', {
         preparedRows: preparedAdMediaRows.length,
+        minTargetDate: adMediaDateRange.minDate,
+        maxTargetDate: adMediaDateRange.maxDate,
       })
 
       if (preparedAdMediaRows.length === 0) {
@@ -852,9 +947,12 @@ uploadRoute.post('/', async (c) => {
           0
         )
       )
+      mediaSummaryDateRange = getTargetDateRange(preparedMediaSummaryRows)
 
       logUploadInfo('media_summary_daily prepared rows', {
         preparedRows: preparedMediaSummaryRows.length,
+        minTargetDate: mediaSummaryDateRange.minDate,
+        maxTargetDate: mediaSummaryDateRange.maxDate,
         linkedMediaRows: preparedMediaSummaryRows.filter((row) => row.mediaId !== null).length,
         unlinkedMediaRows: preparedMediaSummaryRows.filter((row) => row.mediaId === null).length,
       })
@@ -951,6 +1049,21 @@ uploadRoute.post('/', async (c) => {
         uploadHistoryId,
         savedRows,
       })
+
+      if (adMediaDateRange) {
+        await deleteOldAdMediaRowsInRange(
+          c.env.DB,
+          mediaId,
+          adMediaDateRange,
+          uploadHistoryId
+        )
+        logUploadInfo('ad_media_daily old rows cleaned', {
+          uploadHistoryId,
+          mediaId,
+          minTargetDate: adMediaDateRange.minDate,
+          maxTargetDate: adMediaDateRange.maxDate,
+        })
+      }
     }
 
     if (fileType === 'site_summary_csv') {
@@ -992,6 +1105,26 @@ uploadRoute.post('/', async (c) => {
         uploadHistoryId,
         savedRows,
       })
+
+      if (mediaSummaryDateRange) {
+        await deleteOldMediaSummaryRowsInRange(
+          c.env.DB,
+          preparedMediaSummaryRows,
+          mediaSummaryDateRange,
+          uploadHistoryId
+        )
+        logUploadInfo('media_summary_daily old rows cleaned', {
+          uploadHistoryId,
+          minTargetDate: mediaSummaryDateRange.minDate,
+          maxTargetDate: mediaSummaryDateRange.maxDate,
+          mediaIds: uniqueNumbers(preparedMediaSummaryRows.map((row) => row.mediaId)).length,
+          unlinkedAdCodes: uniqueStrings(
+            preparedMediaSummaryRows
+              .filter((row) => row.mediaId === null)
+              .map((row) => row.adCode)
+          ).length,
+        })
+      }
     }
   } catch (err) {
     logUploadError('detail insert failed', {
