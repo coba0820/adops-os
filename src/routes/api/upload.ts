@@ -70,7 +70,10 @@ const AD_MEDIA_HEADERS: Record<string, HeaderDefinition> = {
 }
 
 const MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
-  date: { label: '日付', aliases: ['日付', 'Date', 'date', '年月日', '対象日', '集計日'] },
+  date: {
+    label: '日付',
+    aliases: ['日付け', '日付', 'Date', '年月日', '対象日', '集計日'],
+  },
   adCode: { label: '広告コード', aliases: ['広告コード', '広告CD', '広告コード名', 'Ad Code', 'ad_code', 'Campaign ID', 'campaign_id'] },
   accessCount: { label: 'アクセス数', aliases: ['アクセス数', 'アクセス', 'Access', 'access', 'access_count', '流入数'] },
   registrationCount: { label: '登録者数', aliases: ['登録者数', '登録数', '登録', 'Registration', 'Registrations', 'registration', 'registration_count'] },
