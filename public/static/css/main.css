@@ -393,6 +393,136 @@ button {
 }
 
 /* 今日やることリスト */
+.forecast-filter-bar {
+  display: grid;
+  grid-template-columns: 180px auto 1fr;
+  gap: 12px;
+  align-items: end;
+}
+
+.forecast-filter-bar .form-row {
+  margin-bottom: 0;
+}
+
+.forecast-filter-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.forecast-period-meta {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.forecast-period-meta span {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+}
+
+.forecast-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.forecast-metric-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  padding: 14px;
+}
+
+.forecast-metric-card.forecast-good {
+  border-color: #bbf7d0;
+  background: var(--color-success-soft);
+}
+
+.forecast-metric-card.forecast-bad {
+  border-color: #fecaca;
+  background: var(--color-danger-soft);
+}
+
+.forecast-metric-title {
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 12px;
+}
+
+.forecast-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.forecast-step {
+  min-height: 72px;
+  padding: 9px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.forecast-step-label,
+.forecast-step-ratio {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.forecast-step-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 3px 0;
+}
+
+.forecast-judgement {
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.forecast-good {
+  color: var(--color-success);
+}
+
+.forecast-bad {
+  color: var(--color-danger);
+}
+
+.forecast-neutral {
+  color: var(--color-text-secondary);
+}
+
+.forecast-table th {
+  text-align: center;
+}
+
+.forecast-table th:first-child,
+.forecast-table td:first-child {
+  text-align: left;
+  min-width: 150px;
+}
+
+.forecast-table td {
+  vertical-align: top;
+}
+
+.forecast-cell-main {
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.forecast-cell-sub {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+
 .todo-list {
   display: flex;
   flex-direction: column;
