@@ -133,6 +133,8 @@ export function mountCsvUploadBox(rootEl, options) {
           showToast('広告媒体CSVの実績を保存しました', 'success')
         } else if (fileType === 'site_summary_csv') {
           showToast('媒体集計CSVの実績を保存しました', 'success')
+        } else if (fileType === 'payment_report_csv') {
+          showToast('決済レポートCSVの実績を保存しました', 'success')
         } else {
           showToast(`「${file.name}」を取込みました（${rowCount}行）`, 'success')
         }
@@ -151,7 +153,9 @@ export function mountCsvUploadBox(rootEl, options) {
 }
 
 function shouldSendCsvRows(fileType) {
-  return fileType === 'ad_media_csv' || fileType === 'site_summary_csv'
+  return fileType === 'ad_media_csv' ||
+    fileType === 'site_summary_csv' ||
+    fileType === 'payment_report_csv'
 }
 
 /**

@@ -13,6 +13,8 @@ type AnalysisMetrics = {
   access_count: number
   registration_count: number
   provisional_registration_count: number
+  payer_count: number
+  revenue: number
   ctr: number | null
   cpc: number | null
   cpm: number | null
@@ -21,6 +23,8 @@ type AnalysisMetrics = {
   cpf: number | null
   cpa: number | null
   cvr: number | null
+  payment_rate: number | null
+  recovery_rate: number | null
 }
 
 type AnalysisRow = AnalysisMetrics & {
@@ -58,6 +62,8 @@ type AggregateRow = {
   access_count?: number | null
   registration_count?: number | null
   provisional_registration_count?: number | null
+  payer_count?: number | null
+  revenue?: number | null
 }
 
 function parseDateParam(value: string | null) {
@@ -98,6 +104,8 @@ function buildMetrics(values: {
   accessCount: number
   registrationCount: number
   provisionalRegistrationCount: number
+  payerCount: number
+  revenue: number
 }): AnalysisMetrics {
   const cvCount = values.registrationCount + values.provisionalRegistrationCount
 
@@ -109,6 +117,8 @@ function buildMetrics(values: {
     access_count: values.accessCount,
     registration_count: values.registrationCount,
     provisional_registration_count: values.provisionalRegistrationCount,
+    payer_count: values.payerCount,
+    revenue: values.revenue,
     ctr: divideOrNull(values.clicks, values.impressions),
     cpc: divideOrNull(values.cost, values.clicks),
     cpm: values.impressions > 0 ? (values.cost / values.impressions) * 1000 : null,
@@ -117,6 +127,8 @@ function buildMetrics(values: {
     cpf: divideOrNull(values.cost, cvCount),
     cpa: divideOrNull(values.cost, values.registrationCount),
     cvr: divideOrNull(values.registrationCount, values.mediaCv),
+    payment_rate: divideOrNull(values.payerCount, values.registrationCount),
+    recovery_rate: divideOrNull(values.revenue, values.cost),
   }
 }
 
@@ -198,29 +210,32 @@ function buildAdMediaWhere(filters: {
   }
 }
 
-function buildMediaSummaryWhere(filters: {
-  startDate: string | null
-  endDate: string | null
-  mediaId: number | null
-  adCode: string | null
-}) {
+function buildSimpleDailyWhere(
+  alias: string,
+  filters: {
+    startDate: string | null
+    endDate: string | null
+    mediaId: number | null
+    adCode: string | null
+  }
+) {
   const where: string[] = []
   const bindings: Array<string | number> = []
 
   if (filters.startDate) {
-    where.push('s.target_date >= ?')
+    where.push(`${alias}.target_date >= ?`)
     bindings.push(filters.startDate)
   }
   if (filters.endDate) {
-    where.push('s.target_date <= ?')
+    where.push(`${alias}.target_date <= ?`)
     bindings.push(filters.endDate)
   }
   if (filters.mediaId) {
-    where.push('s.media_id = ?')
+    where.push(`${alias}.media_id = ?`)
     bindings.push(filters.mediaId)
   }
   if (filters.adCode) {
-    where.push('s.ad_code = ?')
+    where.push(`${alias}.ad_code = ?`)
     bindings.push(filters.adCode)
   }
 
@@ -228,62 +243,6 @@ function buildMediaSummaryWhere(filters: {
     whereSql: where.length > 0 ? `WHERE ${where.join(' AND ')}` : '',
     bindings,
   }
-}
-
-function rowKey(row: Pick<AggregateRow, 'period_start' | 'period_end' | 'media_id' | 'ad_code'>) {
-  return [
-    row.period_start,
-    row.period_end,
-    row.media_id ?? 'null',
-    row.ad_code || 'null',
-  ].join('|')
-}
-
-function createEmptyRow(row: AggregateRow): AnalysisRow {
-  return {
-    period: row.period,
-    period_start: row.period_start,
-    period_end: row.period_end,
-    media_id: row.media_id,
-    media_name: row.media_name,
-    ad_code: row.ad_code,
-    ...buildMetrics({
-      cost: 0,
-      impressions: 0,
-      clicks: 0,
-      mediaCv: 0,
-      accessCount: 0,
-      registrationCount: 0,
-      provisionalRegistrationCount: 0,
-    }),
-  }
-}
-
-function applyMetrics(row: AnalysisRow, aggregate: AggregateRow) {
-  const values = {
-    cost: row.cost + toNumber(aggregate.cost),
-    impressions: row.impressions + toNumber(aggregate.impressions),
-    clicks: row.clicks + toNumber(aggregate.clicks),
-    mediaCv: row.media_cv + toNumber(aggregate.media_cv),
-    accessCount: row.access_count + toNumber(aggregate.access_count),
-    registrationCount: row.registration_count + toNumber(aggregate.registration_count),
-    provisionalRegistrationCount:
-      row.provisional_registration_count + toNumber(aggregate.provisional_registration_count),
-  }
-
-  Object.assign(row, buildMetrics(values))
-}
-
-function sortRows(rows: AnalysisRow[]) {
-  return rows.sort((a, b) => {
-    const periodCompare = a.period_start.localeCompare(b.period_start)
-    if (periodCompare !== 0) return periodCompare
-
-    const mediaCompare = (a.media_name || '').localeCompare(b.media_name || '', 'ja')
-    if (mediaCompare !== 0) return mediaCompare
-
-    return (a.ad_code || '').localeCompare(b.ad_code || '', 'ja')
-  })
 }
 
 function buildSummary(rows: AnalysisRow[]) {
@@ -297,6 +256,8 @@ function buildSummary(rows: AnalysisRow[]) {
       registrationCount: total.registrationCount + row.registration_count,
       provisionalRegistrationCount:
         total.provisionalRegistrationCount + row.provisional_registration_count,
+      payerCount: total.payerCount + row.payer_count,
+      revenue: total.revenue + row.revenue,
     }),
     {
       cost: 0,
@@ -306,6 +267,8 @@ function buildSummary(rows: AnalysisRow[]) {
       accessCount: 0,
       registrationCount: 0,
       provisionalRegistrationCount: 0,
+      payerCount: 0,
+      revenue: 0,
     }
   ))
 }
@@ -320,8 +283,10 @@ analysisRoute.get('/summary', async (c) => {
   const filters = { startDate, endDate, mediaId, adCode }
   const adPeriodSql = getPeriodSql(groupBy, 'd')
   const summaryPeriodSql = getPeriodSql(groupBy, 's')
+  const paymentPeriodSql = getPeriodSql(groupBy, 'p')
   const adWhere = buildAdMediaWhere(filters)
-  const mediaSummaryWhere = buildMediaSummaryWhere(filters)
+  const mediaSummaryWhere = buildSimpleDailyWhere('s', filters)
+  const paymentWhere = buildSimpleDailyWhere('p', filters)
 
   const detailSql = `
     WITH
@@ -382,61 +347,71 @@ analysisRoute.get('/summary', async (c) => {
       ${mediaSummaryWhere.whereSql}
       GROUP BY period, period_start, period_end, s.media_id, m.media_name, ad_code
     ),
-    joined AS (
+    payment_agg AS (
       SELECT
-        COALESCE(a.period, s.period) AS period,
-        COALESCE(a.period_start, s.period_start) AS period_start,
-        COALESCE(a.period_end, s.period_end) AS period_end,
-        COALESCE(a.media_id, s.media_id) AS media_id,
-        COALESCE(a.media_name, s.media_name, '') AS media_name,
-        COALESCE(a.ad_code, s.ad_code) AS ad_code,
-        COALESCE(a.cost, 0) AS cost,
-        COALESCE(a.impressions, 0) AS impressions,
-        COALESCE(a.clicks, 0) AS clicks,
-        COALESCE(a.media_cv, 0) AS media_cv,
-        COALESCE(s.access_count, 0) AS access_count,
-        COALESCE(s.registration_count, 0) AS registration_count,
-        COALESCE(s.provisional_registration_count, 0) AS provisional_registration_count
-      FROM ad_agg a
-      LEFT JOIN summary_agg s
-        ON a.period_start = s.period_start
-       AND a.period_end = s.period_end
-       AND COALESCE(a.media_id, -1) = COALESCE(s.media_id, -1)
-       AND COALESCE(a.ad_code, '') = COALESCE(s.ad_code, '')
-
-      UNION ALL
-
-      SELECT
-        s.period,
-        s.period_start,
-        s.period_end,
-        s.media_id,
-        s.media_name,
-        s.ad_code,
-        0 AS cost,
-        0 AS impressions,
-        0 AS clicks,
-        0 AS media_cv,
-        COALESCE(s.access_count, 0) AS access_count,
-        COALESCE(s.registration_count, 0) AS registration_count,
-        COALESCE(s.provisional_registration_count, 0) AS provisional_registration_count
-      FROM summary_agg s
-      LEFT JOIN ad_agg a
-        ON a.period_start = s.period_start
-       AND a.period_end = s.period_end
-       AND COALESCE(a.media_id, -1) = COALESCE(s.media_id, -1)
-       AND COALESCE(a.ad_code, '') = COALESCE(s.ad_code, '')
-      WHERE a.period_start IS NULL
+        ${paymentPeriodSql.period} AS period,
+        ${paymentPeriodSql.periodStart} AS period_start,
+        ${paymentPeriodSql.periodEnd} AS period_end,
+        p.media_id,
+        COALESCE(m.media_name, '') AS media_name,
+        NULLIF(TRIM(p.ad_code), '') AS ad_code,
+        SUM(p.payer_count) AS payer_count,
+        SUM(p.revenue) AS revenue
+      FROM payment_report_daily p
+      LEFT JOIN media_master m ON p.media_id = m.id
+      ${paymentWhere.whereSql}
+      GROUP BY period, period_start, period_end, p.media_id, m.media_name, ad_code
+    ),
+    base_keys AS (
+      SELECT period, period_start, period_end, media_id, media_name, ad_code FROM ad_agg
+      UNION
+      SELECT period, period_start, period_end, media_id, media_name, ad_code FROM summary_agg
+      UNION
+      SELECT period, period_start, period_end, media_id, media_name, ad_code FROM payment_agg
     )
-    SELECT *
-    FROM joined
-    ORDER BY period_start ASC, media_name ASC, ad_code ASC
+    SELECT
+      k.period,
+      k.period_start,
+      k.period_end,
+      k.media_id,
+      k.media_name,
+      k.ad_code,
+      COALESCE(a.cost, 0) AS cost,
+      COALESCE(a.impressions, 0) AS impressions,
+      COALESCE(a.clicks, 0) AS clicks,
+      COALESCE(a.media_cv, 0) AS media_cv,
+      COALESCE(s.access_count, 0) AS access_count,
+      COALESCE(s.registration_count, 0) AS registration_count,
+      COALESCE(s.provisional_registration_count, 0) AS provisional_registration_count,
+      COALESCE(p.payer_count, 0) AS payer_count,
+      COALESCE(p.revenue, 0) AS revenue
+    FROM base_keys k
+    LEFT JOIN ad_agg a
+      ON a.period_start = k.period_start
+     AND a.period_end = k.period_end
+     AND COALESCE(a.media_id, -1) = COALESCE(k.media_id, -1)
+     AND COALESCE(a.ad_code, '') = COALESCE(k.ad_code, '')
+    LEFT JOIN summary_agg s
+      ON s.period_start = k.period_start
+     AND s.period_end = k.period_end
+     AND COALESCE(s.media_id, -1) = COALESCE(k.media_id, -1)
+     AND COALESCE(s.ad_code, '') = COALESCE(k.ad_code, '')
+    LEFT JOIN payment_agg p
+      ON p.period_start = k.period_start
+     AND p.period_end = k.period_end
+     AND COALESCE(p.media_id, -1) = COALESCE(k.media_id, -1)
+     AND COALESCE(p.ad_code, '') = COALESCE(k.ad_code, '')
+    ORDER BY k.period_start ASC, k.media_name ASC, k.ad_code ASC
   `
 
   const { results } = await prepareWithBindings(
     c.env.DB,
     detailSql,
-    [...adWhere.bindings, ...mediaSummaryWhere.bindings]
+    [
+      ...adWhere.bindings,
+      ...mediaSummaryWhere.bindings,
+      ...paymentWhere.bindings,
+    ]
   ).all<AggregateRow>()
 
   const rows = results.map((row) => ({
@@ -454,6 +429,8 @@ analysisRoute.get('/summary', async (c) => {
       accessCount: toNumber(row.access_count),
       registrationCount: toNumber(row.registration_count),
       provisionalRegistrationCount: toNumber(row.provisional_registration_count),
+      payerCount: toNumber(row.payer_count),
+      revenue: toNumber(row.revenue),
     }),
   }))
   const summary = buildSummary(rows)

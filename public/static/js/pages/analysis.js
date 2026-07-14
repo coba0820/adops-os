@@ -14,6 +14,10 @@ const SUMMARY_CARDS = [
   { key: 'cpf', label: 'CPF', icon: 'fa-calculator', format: formatCurrencyNoDecimal },
   { key: 'cpa', label: 'CPA', icon: 'fa-receipt', format: formatCurrencyNoDecimal },
   { key: 'cvr', label: 'CVR', icon: 'fa-percent', format: formatPercent },
+  { key: 'payer_count', label: '入金者数', icon: 'fa-user-plus', format: formatInteger },
+  { key: 'revenue', label: '売上', icon: 'fa-sack-dollar', format: formatCurrency },
+  { key: 'payment_rate', label: '入金率', icon: 'fa-circle-dollar-to-slot', format: formatPercent },
+  { key: 'recovery_rate', label: '回収率', icon: 'fa-chart-pie', format: formatPercent },
 ]
 
 const METRIC_COLUMNS = [
@@ -32,6 +36,10 @@ const METRIC_COLUMNS = [
   { key: 'cpf', label: 'CPF', format: formatCurrencyNoDecimal },
   { key: 'cpa', label: 'CPA', format: formatCurrencyNoDecimal },
   { key: 'cvr', label: 'CVR', format: formatPercent },
+  { key: 'payer_count', label: '入金者数', format: formatInteger },
+  { key: 'revenue', label: '売上', format: formatCurrency },
+  { key: 'payment_rate', label: '入金率', format: formatPercent, totalOnly: true },
+  { key: 'recovery_rate', label: '回収率', format: formatPercent, totalOnly: true },
 ]
 
 const GROUP_LABELS = {
@@ -256,7 +264,10 @@ function renderTableRow(row, isTotal, groupBy) {
       <td>${escapeHtml(isTotal ? row.period : formatPeriod(row, groupBy))}</td>
       <td>${escapeHtml(isTotal ? '-' : row.media_name || '未設定')}</td>
       <td>${escapeHtml(isTotal ? '-' : row.ad_code || '未設定')}</td>
-      ${METRIC_COLUMNS.map((column) => `<td class="text-right">${column.format(row[column.key])}</td>`).join('')}
+      ${METRIC_COLUMNS.map((column) => {
+        const value = column.totalOnly && !isTotal ? null : row[column.key]
+        return `<td class="text-right">${column.format(value)}</td>`
+      }).join('')}
     </tr>
   `
 }

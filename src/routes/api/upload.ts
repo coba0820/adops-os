@@ -25,6 +25,7 @@ const COMMON_REQUIRED_FILE_TYPES: UploadFileType[] = [
 const UPLOAD_DETAIL_TABLES = [
   'ad_media_daily',
   'media_summary_daily',
+  'payment_report_daily',
 ] as const
 
 const INSERT_BATCH_SIZE = 25
@@ -54,6 +55,16 @@ type MediaSummaryDailyRow = {
   accessCount: number
   registrationCount: number
   provisionalRegistrationCount: number
+  uploadHistoryId: number
+}
+
+type PaymentReportDailyRow = {
+  targetDate: string
+  mediaId: number | null
+  adCode: string
+  payerKey?: string | null
+  payerCount: number
+  revenue: number
   uploadHistoryId: number
 }
 
@@ -112,6 +123,85 @@ const MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
   provisionalRegistrationCount: {
     label: '仮登録者数',
     aliases: ['仮登録者数', '仮登録数', '仮登録', 'Provisional Registration', 'Provisional Registrations', 'provisional_registration', 'provisional_registration_count'],
+  },
+}
+
+const PAYMENT_REPORT_HEADERS: Record<string, HeaderDefinition> = {
+  registrationDate: {
+    label: '登録日',
+    aliases: [
+      '登録日',
+      '登録日時',
+      '会員登録日',
+      'ユーザー登録日',
+      '登録完了日',
+      'Registration Date',
+      'Registered Date',
+      'Signup Date',
+      'Sign Up Date',
+      'registration_date',
+      'registered_at',
+      'signup_date',
+    ],
+  },
+  adCode: {
+    label: '広告コード',
+    aliases: [
+      '広告コード',
+      '広告CD',
+      '広告コード名',
+      'Ad Code',
+      'ad_code',
+      'Campaign ID',
+      'campaign_id',
+    ],
+  },
+  payerCount: {
+    label: '入金者数',
+    aliases: [
+      '入金者数',
+      '課金者数',
+      '決済者数',
+      '購入者数',
+      'Payers',
+      'Payer Count',
+      'payer_count',
+      'payment_user_count',
+    ],
+  },
+  payerId: {
+    label: '入金者ID',
+    aliases: [
+      '入金者ID',
+      '課金者ID',
+      '決済者ID',
+      'ユーザーID',
+      '会員ID',
+      '顧客ID',
+      'User ID',
+      'Member ID',
+      'Customer ID',
+      'user_id',
+      'member_id',
+      'customer_id',
+      'payer_id',
+    ],
+  },
+  revenue: {
+    label: '売上',
+    aliases: [
+      '売上',
+      '売上金額',
+      '入金額',
+      '決済金額',
+      '課金額',
+      'Revenue',
+      'Sales',
+      'Amount',
+      'Payment Amount',
+      'revenue',
+      'amount',
+    ],
   },
 }
 
@@ -305,7 +395,9 @@ function parseInteger(value: unknown) {
 }
 
 function parseMoney(value: unknown) {
-  const normalized = String(value ?? '').replace(/[,\s￥¥$]/g, '')
+  const normalized = String(value ?? '')
+    .replace(/[,\s￥¥円$]/g, '')
+    .replace(/[^\d.-]/g, '')
   if (normalized === '') return 0
   const number = Number(normalized)
   return Number.isFinite(number) ? number : 0
@@ -407,6 +499,44 @@ function aggregateMediaSummaryRows(rows: MediaSummaryDailyRow[]) {
   return [...rowsByKey.values()]
 }
 
+function aggregatePaymentReportRows(rows: PaymentReportDailyRow[]) {
+  const rowsByKey = new Map<string, PaymentReportDailyRow>()
+  const payerKeysByKey = new Map<string, Set<string>>()
+
+  for (const row of rows) {
+    const key = [
+      row.targetDate,
+      row.mediaId ?? 'null',
+      row.adCode || '',
+    ].join('|')
+    const current = rowsByKey.get(key)
+    const payerKey = row.payerKey?.trim()
+
+    if (!current) {
+      rowsByKey.set(key, {
+        ...row,
+        payerCount: payerKey ? 1 : row.payerCount,
+      })
+      if (payerKey) {
+        payerKeysByKey.set(key, new Set([payerKey]))
+      }
+      continue
+    }
+
+    current.revenue += row.revenue
+    if (payerKey) {
+      const payerKeys = payerKeysByKey.get(key) ?? new Set<string>()
+      payerKeys.add(payerKey)
+      payerKeysByKey.set(key, payerKeys)
+      current.payerCount = payerKeys.size
+    } else {
+      current.payerCount += row.payerCount
+    }
+  }
+
+  return [...rowsByKey.values()]
+}
+
 function getTargetDateRange(rows: Array<{ targetDate: string }>): TargetDateRange {
   if (rows.length === 0) {
     throw new Error('保存対象の明細行がありません')
@@ -482,6 +612,50 @@ async function deleteOldMediaSummaryRowsInRange(
     const placeholders = chunk.map(() => '?').join(', ')
     await db.prepare(
       `DELETE FROM media_summary_daily
+       WHERE target_date BETWEEN ? AND ?
+         AND media_id IS NULL
+         AND ad_code IN (${placeholders})
+         AND upload_history_id <> ?`
+    )
+      .bind(range.minDate, range.maxDate, ...chunk, uploadHistoryId)
+      .run()
+  }
+}
+
+async function deleteOldPaymentReportRowsInRange(
+  db: D1Database,
+  rows: PaymentReportDailyRow[],
+  range: TargetDateRange,
+  uploadHistoryId: number
+) {
+  const mediaIds = uniqueNumbers(rows.map((row) => row.mediaId))
+  for (let i = 0; i < mediaIds.length; i += LOOKUP_BATCH_SIZE) {
+    const chunk = mediaIds.slice(i, i + LOOKUP_BATCH_SIZE)
+    if (chunk.length === 0) continue
+
+    const placeholders = chunk.map(() => '?').join(', ')
+    await db.prepare(
+      `DELETE FROM payment_report_daily
+       WHERE target_date BETWEEN ? AND ?
+         AND media_id IN (${placeholders})
+         AND upload_history_id <> ?`
+    )
+      .bind(range.minDate, range.maxDate, ...chunk, uploadHistoryId)
+      .run()
+  }
+
+  const unlinkedAdCodes = uniqueStrings(
+    rows
+      .filter((row) => row.mediaId === null)
+      .map((row) => row.adCode)
+  )
+  for (let i = 0; i < unlinkedAdCodes.length; i += LOOKUP_BATCH_SIZE) {
+    const chunk = unlinkedAdCodes.slice(i, i + LOOKUP_BATCH_SIZE)
+    if (chunk.length === 0) continue
+
+    const placeholders = chunk.map(() => '?').join(', ')
+    await db.prepare(
+      `DELETE FROM payment_report_daily
        WHERE target_date BETWEEN ? AND ?
          AND media_id IS NULL
          AND ad_code IN (${placeholders})
@@ -644,6 +818,81 @@ async function buildMediaSummaryDailyRows(
   })
 
   return summaryRows
+}
+
+async function buildPaymentReportDailyRows(
+  db: D1Database,
+  rows: CsvRows,
+  uploadHistoryId: number
+) {
+  const [headerRow, ...bodyRows] = rows
+  if (!headerRow || headerRow.length === 0) {
+    throw new Error('CSVヘッダー行が見つかりません')
+  }
+
+  const headerIndex = buildHeaderIndex(headerRow)
+  const hasPayerCountHeader = hasHeader(headerIndex, PAYMENT_REPORT_HEADERS.payerCount.aliases)
+  const hasPayerIdHeader = hasHeader(headerIndex, PAYMENT_REPORT_HEADERS.payerId.aliases)
+  logUploadInfo('buildPaymentReportDailyRows called', {
+    csvRows: rows.length,
+    bodyRows: countBodyRows(rows),
+    headers: headerRow,
+    normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
+    dateBasis: 'registration_date',
+    hasPayerCountHeader,
+    hasPayerIdHeader,
+  })
+
+  ensureHeaders(headerIndex, [
+    PAYMENT_REPORT_HEADERS.registrationDate,
+    PAYMENT_REPORT_HEADERS.adCode,
+    PAYMENT_REPORT_HEADERS.revenue,
+  ])
+
+  const parsedRows = bodyRows.filter((row) => !isBlankRow(row)).map((row, index) => {
+    const targetDate = parseTargetDate(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.registrationDate.aliases))
+    if (!targetDate) {
+      throw new Error(`${index + 2}行目の登録日が正しくありません`)
+    }
+
+    const adCode = getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.adCode.aliases)
+    if (!adCode) {
+      throw new Error(`${index + 2}行目の広告コードが空です`)
+    }
+
+    const payerCountValue = hasPayerCountHeader
+      ? parseInteger(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.payerCount.aliases))
+      : 1
+
+    return {
+      targetDate,
+      adCode,
+      payerKey: hasPayerIdHeader
+        ? getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.payerId.aliases)
+        : null,
+      payerCount: payerCountValue,
+      revenue: parseMoney(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.revenue.aliases)),
+      uploadHistoryId,
+    }
+  })
+
+  const mediaIdsByAdCode = await resolveMediaIdsByAdCode(
+    db,
+    parsedRows.map((row) => row.adCode)
+  )
+
+  const paymentRows = parsedRows.map((row): PaymentReportDailyRow => ({
+    ...row,
+    mediaId: mediaIdsByAdCode.get(row.adCode) ?? null,
+  }))
+
+  logUploadInfo('buildPaymentReportDailyRows completed', {
+    builtRows: paymentRows.length,
+    linkedMediaRows: paymentRows.filter((row) => row.mediaId !== null).length,
+    unlinkedMediaRows: paymentRows.filter((row) => row.mediaId === null).length,
+  })
+
+  return paymentRows
 }
 
 uploadRoute.get('/', async (c) => {
@@ -874,11 +1123,17 @@ uploadRoute.post('/', async (c) => {
   }
 
   const csvRows =
-    fileType === 'ad_media_csv' || fileType === 'site_summary_csv'
+    fileType === 'ad_media_csv' ||
+    fileType === 'site_summary_csv' ||
+    fileType === 'payment_report_csv'
       ? normalizeCsvRows(body.csv_rows, body.csv_text)
       : []
 
-  if (fileType === 'ad_media_csv' || fileType === 'site_summary_csv') {
+  if (
+    fileType === 'ad_media_csv' ||
+    fileType === 'site_summary_csv' ||
+    fileType === 'payment_report_csv'
+  ) {
     logUploadInfo('CSV detail payload received', {
       fileType,
       fileName,
@@ -893,7 +1148,11 @@ uploadRoute.post('/', async (c) => {
   }
 
   if (
-    (fileType === 'ad_media_csv' || fileType === 'site_summary_csv') &&
+    (
+      fileType === 'ad_media_csv' ||
+      fileType === 'site_summary_csv' ||
+      fileType === 'payment_report_csv'
+    ) &&
     csvRows.length === 0
   ) {
     return c.json<ApiResponse<null>>(
@@ -903,7 +1162,11 @@ uploadRoute.post('/', async (c) => {
   }
 
   if (
-    (fileType === 'ad_media_csv' || fileType === 'site_summary_csv') &&
+    (
+      fileType === 'ad_media_csv' ||
+      fileType === 'site_summary_csv' ||
+      fileType === 'payment_report_csv'
+    ) &&
     countBodyRows(csvRows) === 0
   ) {
     return c.json<ApiResponse<null>>(
@@ -914,8 +1177,10 @@ uploadRoute.post('/', async (c) => {
 
   let preparedAdMediaRows: AdMediaDailyRow[] = []
   let preparedMediaSummaryRows: MediaSummaryDailyRow[] = []
+  let preparedPaymentReportRows: PaymentReportDailyRow[] = []
   let adMediaDateRange: TargetDateRange | null = null
   let mediaSummaryDateRange: TargetDateRange | null = null
+  let paymentReportDateRange: TargetDateRange | null = null
 
   try {
     if (fileType === 'ad_media_csv') {
@@ -959,6 +1224,30 @@ uploadRoute.post('/', async (c) => {
 
       if (preparedMediaSummaryRows.length === 0) {
         throw new Error('媒体集計CSVに保存対象の明細行がありません')
+      }
+    }
+
+    if (fileType === 'payment_report_csv') {
+      preparedPaymentReportRows = aggregatePaymentReportRows(
+        await buildPaymentReportDailyRows(
+          c.env.DB,
+          csvRows,
+          0
+        )
+      )
+      paymentReportDateRange = getTargetDateRange(preparedPaymentReportRows)
+
+      logUploadInfo('payment_report_daily prepared rows', {
+        preparedRows: preparedPaymentReportRows.length,
+        minTargetDate: paymentReportDateRange.minDate,
+        maxTargetDate: paymentReportDateRange.maxDate,
+        linkedMediaRows: preparedPaymentReportRows.filter((row) => row.mediaId !== null).length,
+        unlinkedMediaRows: preparedPaymentReportRows.filter((row) => row.mediaId === null).length,
+        dateBasis: 'registration_date',
+      })
+
+      if (preparedPaymentReportRows.length === 0) {
+        throw new Error('決済レポートCSVに保存対象の明細行がありません')
       }
     }
   } catch (err) {
@@ -1120,6 +1409,65 @@ uploadRoute.post('/', async (c) => {
           mediaIds: uniqueNumbers(preparedMediaSummaryRows.map((row) => row.mediaId)).length,
           unlinkedAdCodes: uniqueStrings(
             preparedMediaSummaryRows
+              .filter((row) => row.mediaId === null)
+              .map((row) => row.adCode)
+          ).length,
+        })
+      }
+    }
+
+    if (fileType === 'payment_report_csv') {
+      savedRows = preparedPaymentReportRows.length
+      logUploadInfo('payment_report_daily insert target rows', {
+        uploadHistoryId,
+        savedRows,
+        linkedMediaRows: preparedPaymentReportRows.filter((row) => row.mediaId !== null).length,
+        unlinkedMediaRows: preparedPaymentReportRows.filter((row) => row.mediaId === null).length,
+        dateBasis: 'registration_date',
+      })
+
+      if (savedRows === 0) {
+        throw new Error('決済レポートCSVに保存対象の明細行がありません')
+      }
+
+      for (let i = 0; i < preparedPaymentReportRows.length; i += INSERT_BATCH_SIZE) {
+        const chunk = preparedPaymentReportRows.slice(i, i + INSERT_BATCH_SIZE)
+        await c.env.DB.batch(
+          chunk.map((row) =>
+            c.env.DB.prepare(
+              `INSERT OR REPLACE INTO payment_report_daily
+                 (target_date, media_id, ad_code, payer_count, revenue, upload_history_id)
+               VALUES (?, ?, ?, ?, ?, ?)`
+            ).bind(
+              row.targetDate,
+              row.mediaId,
+              row.adCode,
+              row.payerCount,
+              row.revenue,
+              uploadHistoryId
+            )
+          )
+        )
+      }
+      logUploadInfo('payment_report_daily insert completed', {
+        uploadHistoryId,
+        savedRows,
+      })
+
+      if (paymentReportDateRange) {
+        await deleteOldPaymentReportRowsInRange(
+          c.env.DB,
+          preparedPaymentReportRows,
+          paymentReportDateRange,
+          uploadHistoryId
+        )
+        logUploadInfo('payment_report_daily old rows cleaned', {
+          uploadHistoryId,
+          minTargetDate: paymentReportDateRange.minDate,
+          maxTargetDate: paymentReportDateRange.maxDate,
+          mediaIds: uniqueNumbers(preparedPaymentReportRows.map((row) => row.mediaId)).length,
+          unlinkedAdCodes: uniqueStrings(
+            preparedPaymentReportRows
               .filter((row) => row.mediaId === null)
               .map((row) => row.adCode)
           ).length,
