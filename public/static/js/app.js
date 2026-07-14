@@ -8,6 +8,7 @@ import { renderDashboardPage } from './pages/dashboard.js'
 import { renderDataImportPage } from './pages/data-import.js'
 import { renderMasterPage } from './pages/master.js'
 import { renderAnalysisPage } from './pages/analysis.js'
+import { renderBudgetPage } from './pages/budget.js'
 import { renderComingSoonPage } from './pages/coming-soon.js'
 
 // ------------------------------------------------------------
@@ -21,7 +22,7 @@ const ROUTES = {
   'data-import': { title: 'データ取込', render: renderDataImportPage },
   master: { title: 'マスタ管理', render: renderMasterPage },
   analysis: { title: '実績分析', render: renderAnalysisPage },
-  budget: { title: '予算管理', render: (el) => renderComingSoonPage('予算管理', el) },
+  budget: { title: '予算管理', render: renderBudgetPage },
   forecast: { title: '着地予測', render: (el) => renderComingSoonPage('着地予測', el) },
   settings: { title: '設定', render: (el) => renderComingSoonPage('設定', el) },
 }

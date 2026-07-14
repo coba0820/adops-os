@@ -15,6 +15,7 @@ import { campaignRoute } from './routes/api/campaign'
 import { uploadRoute } from './routes/api/upload'
 import { dashboardRoute } from './routes/api/dashboard'
 import { analysisRoute } from './routes/api/analysis'
+import { budgetRoute } from './routes/api/budget'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -32,6 +33,7 @@ app.route('/api/campaign', campaignRoute) // キャンペーンマスタ CRUD
 app.route('/api/upload', uploadRoute) // CSVアップロード履歴
 app.route('/api/dashboard', dashboardRoute) // ダッシュボード用データ
 app.route('/api/analysis', analysisRoute) // 実績分析
+app.route('/api/budget', budgetRoute) // 予算管理
 
 // ------------------------------------------------------------
 // トップページ（SPAシェルを返す。以降はフロントJSがルーティング）

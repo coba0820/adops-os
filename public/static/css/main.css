@@ -705,6 +705,166 @@ button {
   font-weight: 700;
 }
 
+/* 予算管理 */
+.budget-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.budget-filter-bar {
+  display: grid;
+  grid-template-columns: 160px repeat(3, minmax(140px, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.budget-filter-bar .form-row {
+  margin-bottom: 0;
+}
+
+.budget-filter-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.budget-progress-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.budget-progress-item {
+  padding: 13px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+
+.budget-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-bottom: 9px;
+}
+
+.budget-progress-head strong {
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.budget-progress-track {
+  height: 9px;
+  border-radius: 999px;
+  background: var(--color-border);
+  overflow: hidden;
+}
+
+.budget-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--color-primary);
+}
+
+.budget-landing-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.budget-ratio-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.budget-donut-wrap {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  margin: 4px 0 18px;
+}
+
+.budget-donut {
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+
+.budget-donut::after {
+  content: "";
+  position: absolute;
+  width: 82px;
+  height: 82px;
+  border-radius: 50%;
+  background: var(--color-surface);
+}
+
+.budget-donut span {
+  position: relative;
+  z-index: 1;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+}
+
+.budget-ratio-head,
+.budget-ratio-row {
+  display: grid;
+  grid-template-columns: 14px 1fr 72px 72px;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.budget-ratio-head {
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+
+.budget-ratio-row {
+  padding: 7px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.budget-ratio-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.budget-ratio-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.budget-modal-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.budget-auto-values {
+  display: flex;
+  gap: 18px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-soft);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.budget-auto-values strong {
+  color: var(--color-text-primary);
+}
+
 @media (max-width: 1000px) {
   .analysis-filter-bar,
   .analysis-summary-grid {
