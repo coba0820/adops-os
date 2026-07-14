@@ -97,23 +97,56 @@ function renderMetricCard(key, metric) {
   return `
     <div class="forecast-metric-card ${statusClass(metric.status)}">
       <div class="forecast-metric-title">${METRIC_LABELS[key]}</div>
-      <div class="forecast-flow">
-        ${renderValueStep('現在進捗', metric.current, key, metric.current_ratio)}
-        ${renderValueStep('着地予測', metric.forecast, key, metric.forecast_ratio)}
-        ${renderValueStep('目標', metric.target, key, metric.target_ratio)}
-        ${renderValueStep('差分', metric.diff, key, null, true)}
+      <div class="forecast-vertical-flow">
+        ${renderVerticalValue('現在進捗', metric.current, key, metric.current_ratio)}
+        ${renderProgressBar(metric.current_ratio, key, metric.target_missing)}
+        ${renderVerticalValue('着地予測', metric.forecast, key, metric.forecast_ratio)}
+        ${renderProgressBar(metric.forecast_ratio, key, metric.target_missing)}
+        ${renderTargetValue(metric.target, key, metric.target_missing)}
       </div>
-      <div class="forecast-judgement">${judgementText(key, metric)}</div>
+      <div class="forecast-diff-block ${statusClass(metric.status)}">
+        <div class="forecast-diff-label">差分</div>
+        <div class="forecast-diff-value">${formatMetric(metric.diff, key, true)}</div>
+        <div class="forecast-judgement">${judgementText(key, metric)}</div>
+      </div>
     </div>
   `
 }
 
-function renderValueStep(label, value, key, ratio, signed = false) {
+function renderVerticalValue(label, value, key, ratio) {
   return `
-    <div class="forecast-step">
-      <div class="forecast-step-label">${label}</div>
-      <div class="forecast-step-value">${formatMetric(value, key, signed)}</div>
-      <div class="forecast-step-ratio">${ratio === null || ratio === undefined ? '-' : `${Math.round(Number(ratio) * 100)}%`}</div>
+    <div class="forecast-vertical-row">
+      <span>${label}</span>
+      <strong>${formatMetricWithRatio(value, key, ratio)}</strong>
+    </div>
+  `
+}
+
+function renderTargetValue(value, key, targetMissing) {
+  return `
+    <div class="forecast-vertical-row forecast-target-row">
+      <span>目標</span>
+      <strong>${targetMissing ? '目標未設定' : formatMetric(value, key)}</strong>
+    </div>
+  `
+}
+
+function renderProgressBar(ratio, key, targetMissing) {
+  const percent = isNumber(ratio) ? Number(ratio) * 100 : 0
+  const width = Math.max(0, Math.min(100, percent))
+  const tone = targetMissing ? 'neutral' : progressTone(key, ratio)
+  const overClass = !targetMissing && isNumber(ratio) && Number(ratio) > 1 ? 'is-over' : ''
+
+  return `
+    <div class="forecast-progress-wrap">
+      <div class="forecast-progress-meta">
+        <span>進捗率</span>
+        <span>${isNumber(ratio) ? `${Math.round(percent)}%` : '-'}</span>
+      </div>
+      <div class="forecast-progress-track ${overClass}">
+        <div class="forecast-progress-fill forecast-progress-${tone}" style="width:${width}%"></div>
+        <span class="forecast-progress-marker"></span>
+      </div>
     </div>
   `
 }
@@ -208,9 +241,22 @@ function formatMetric(value, key, signed = false) {
   return `${sign}¥${Math.round(number).toLocaleString('ja-JP')}`
 }
 
+function formatMetricWithRatio(value, key, ratio) {
+  const formatted = formatMetric(value, key)
+  if (!isNumber(value) || !isNumber(ratio)) return formatted
+  return `${formatted}（${Math.round(Number(ratio) * 100)}%）`
+}
+
 function formatRatio(value) {
   if (!isNumber(value)) return '-'
   return `${Math.round(Number(value) * 100)}%`
+}
+
+function progressTone(key, ratio) {
+  if (!isNumber(ratio)) return 'neutral'
+  const numericRatio = Number(ratio)
+  if (key === 'registrations') return numericRatio >= 1 ? 'good' : 'bad'
+  return numericRatio > 1 ? 'bad' : 'good'
 }
 
 function isNumber(value) {

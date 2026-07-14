@@ -434,18 +434,16 @@ button {
 .forecast-metric-card {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: var(--color-bg);
-  padding: 14px;
+  background: var(--color-surface);
+  padding: 16px;
 }
 
 .forecast-metric-card.forecast-good {
   border-color: #bbf7d0;
-  background: var(--color-success-soft);
 }
 
 .forecast-metric-card.forecast-bad {
   border-color: #fecaca;
-  background: var(--color-danger-soft);
 }
 
 .forecast-metric-title {
@@ -454,31 +452,119 @@ button {
   margin-bottom: 12px;
 }
 
-.forecast-flow {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+.forecast-vertical-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.forecast-step {
-  min-height: 72px;
-  padding: 9px;
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
+.forecast-vertical-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
   border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
 }
 
-.forecast-step-label,
-.forecast-step-ratio {
-  font-size: 11px;
+.forecast-vertical-row span {
+  flex-shrink: 0;
+  font-size: 12px;
   color: var(--color-text-muted);
 }
 
-.forecast-step-value {
-  font-size: 15px;
-  font-weight: 700;
+.forecast-vertical-row strong {
+  font-size: 17px;
   color: var(--color-text-primary);
-  margin: 3px 0;
+  text-align: right;
+}
+
+.forecast-target-row {
+  background: var(--color-primary-soft);
+}
+
+.forecast-progress-wrap {
+  padding: 0 2px;
+}
+
+.forecast-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+
+.forecast-progress-track {
+  position: relative;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-border);
+}
+
+.forecast-progress-track.is-over {
+  box-shadow: inset 0 0 0 1px #fecaca;
+}
+
+.forecast-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+}
+
+.forecast-progress-good {
+  background: var(--color-success);
+}
+
+.forecast-progress-bad {
+  background: var(--color-danger);
+}
+
+.forecast-progress-neutral {
+  background: var(--color-text-muted);
+}
+
+.forecast-progress-marker {
+  position: absolute;
+  top: -2px;
+  right: 0;
+  width: 2px;
+  height: 14px;
+  background: var(--color-text-primary);
+  opacity: 0.35;
+}
+
+.forecast-diff-block {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+
+.forecast-diff-block.forecast-good {
+  border-color: #bbf7d0;
+  background: var(--color-success-soft);
+}
+
+.forecast-diff-block.forecast-bad {
+  border-color: #fecaca;
+  background: var(--color-danger-soft);
+}
+
+.forecast-diff-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.forecast-diff-value {
+  margin-top: 4px;
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.2;
 }
 
 .forecast-judgement {
