@@ -263,8 +263,54 @@ button {
   gap: 20px;
 }
 
+.dashboard-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.dashboard-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dashboard-kpi-box {
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.dashboard-kpi-box:hover {
+  border-color: var(--color-primary);
+  transform: translateY(-1px);
+}
+
+.dashboard-kpi-sub {
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+
+.dashboard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 @media (max-width: 900px) {
   .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-kpi-grid,
+  .dashboard-forecast-grid,
+  .dashboard-summary-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -277,6 +323,9 @@ button {
   border-radius: var(--radius-md);
   margin-bottom: 8px;
   border: 1px solid var(--color-border);
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
 }
 
 .alert-item:last-child {
@@ -345,10 +394,146 @@ button {
   font-size: 11.5px;
   margin-top: 4px;
   font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.kpi-diff.up { color: var(--color-danger); }
-.kpi-diff.down { color: var(--color-success); }
+.kpi-diff.good { color: var(--color-success); }
+.kpi-diff.bad { color: var(--color-danger); }
+.kpi-diff.neutral { color: var(--color-text-muted); }
+
+.dashboard-forecast-grid,
+.dashboard-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dashboard-summary-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.dashboard-forecast-card,
+.dashboard-summary-item {
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+
+.dashboard-forecast-card.good {
+  border-color: #bbf7d0;
+}
+
+.dashboard-forecast-card.bad {
+  border-color: #fecaca;
+}
+
+.dashboard-section-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 10px;
+}
+
+.dashboard-mini-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 12.5px;
+}
+
+.dashboard-mini-row span {
+  color: var(--color-text-muted);
+}
+
+.dashboard-mini-row strong {
+  color: var(--color-text-primary);
+  text-align: right;
+}
+
+.dashboard-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dashboard-progress-item {
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+
+.dashboard-progress {
+  margin-top: 10px;
+}
+
+.dashboard-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.dashboard-progress-head strong {
+  color: var(--color-text-primary);
+}
+
+.dashboard-progress-track {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-border);
+}
+
+.dashboard-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--color-text-muted);
+}
+
+.dashboard-progress-fill.good {
+  background: var(--color-success);
+}
+
+.dashboard-progress-fill.bad {
+  background: var(--color-danger);
+}
+
+.dashboard-summary-table th {
+  text-align: right;
+}
+
+.dashboard-summary-table th:first-child,
+.dashboard-summary-table td:first-child {
+  text-align: left;
+}
+
+.dashboard-entity-row.level-critical {
+  background: var(--color-danger-soft);
+}
+
+.dashboard-entity-row.level-warning {
+  background: var(--color-warning-soft);
+}
+
+.dashboard-judgement {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  font-size: 12px;
+  font-weight: 700;
+}
 
 /* 着地予測 */
 .forecast-bar-track {
