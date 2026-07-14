@@ -141,10 +141,26 @@ function prepareWithBindings(
   return bindings.length > 0 ? statement.bind(...bindings) : statement
 }
 
-function getPeriodSql(groupBy: AnalysisGroupBy, alias: string) {
+async function tableHasColumns(
+  db: D1Database,
+  tableName: string,
+  requiredColumns: string[]
+) {
+  if (!/^[a-zA-Z0-9_]+$/.test(tableName)) return false
+
+  const { results } = await db.prepare(`PRAGMA table_info(${tableName})`)
+    .all<{ name: string }>()
+
+  const columnNames = new Set(results.map((row) => row.name))
+  return requiredColumns.every((columnName) => columnNames.has(columnName))
+}
+
+function getPeriodSql(groupBy: AnalysisGroupBy, alias: string, dateColumn = 'target_date') {
+  const dateExpression = `${alias}.${dateColumn}`
+
   if (groupBy === 'weekly') {
     const periodStart =
-      `date(${alias}.target_date, '-' || ((CAST(strftime('%w', ${alias}.target_date) AS INTEGER) + 6) % 7) || ' days')`
+      `date(${dateExpression}, '-' || ((CAST(strftime('%w', ${dateExpression}) AS INTEGER) + 6) % 7) || ' days')`
     return {
       period: `${periodStart} || '〜' || date(${periodStart}, '+6 days')`,
       periodStart,
@@ -154,16 +170,16 @@ function getPeriodSql(groupBy: AnalysisGroupBy, alias: string) {
 
   if (groupBy === 'monthly') {
     return {
-      period: `strftime('%Y-%m', ${alias}.target_date)`,
-      periodStart: `date(${alias}.target_date, 'start of month')`,
-      periodEnd: `date(${alias}.target_date, 'start of month', '+1 month', '-1 day')`,
+      period: `strftime('%Y-%m', ${dateExpression})`,
+      periodStart: `date(${dateExpression}, 'start of month')`,
+      periodEnd: `date(${dateExpression}, 'start of month', '+1 month', '-1 day')`,
     }
   }
 
   return {
-    period: `${alias}.target_date`,
-    periodStart: `${alias}.target_date`,
-    periodEnd: `${alias}.target_date`,
+    period: dateExpression,
+    periodStart: dateExpression,
+    periodEnd: dateExpression,
   }
 }
 
@@ -217,17 +233,19 @@ function buildSimpleDailyWhere(
     endDate: string | null
     mediaId: number | null
     adCode: string | null
-  }
+  },
+  dateColumn = 'target_date'
 ) {
   const where: string[] = []
   const bindings: Array<string | number> = []
+  const dateExpression = `${alias}.${dateColumn}`
 
   if (filters.startDate) {
-    where.push(`${alias}.target_date >= ?`)
+    where.push(`${dateExpression} >= ?`)
     bindings.push(filters.startDate)
   }
   if (filters.endDate) {
-    where.push(`${alias}.target_date <= ?`)
+    where.push(`${dateExpression} <= ?`)
     bindings.push(filters.endDate)
   }
   if (filters.mediaId) {
@@ -283,10 +301,53 @@ analysisRoute.get('/summary', async (c) => {
   const filters = { startDate, endDate, mediaId, adCode }
   const adPeriodSql = getPeriodSql(groupBy, 'd')
   const summaryPeriodSql = getPeriodSql(groupBy, 's')
-  const paymentPeriodSql = getPeriodSql(groupBy, 'p')
+  const paymentPeriodSql = getPeriodSql(groupBy, 'p', 'registration_date')
   const adWhere = buildAdMediaWhere(filters)
   const mediaSummaryWhere = buildSimpleDailyWhere('s', filters)
-  const paymentWhere = buildSimpleDailyWhere('p', filters)
+  const hasPaymentReportTable = await tableHasColumns(c.env.DB, 'payment_report_daily', [
+    'registration_date',
+    'customer_id',
+    'ad_code',
+    'payment_count',
+    'payment_amount',
+    'media_id',
+  ])
+  const paymentWhere = hasPaymentReportTable
+    ? buildSimpleDailyWhere('p', filters, 'registration_date')
+    : { whereSql: '', bindings: [] as Array<string | number> }
+  const paymentAggSql = hasPaymentReportTable
+    ? `
+    payment_agg AS (
+      SELECT
+        ${paymentPeriodSql.period} AS period,
+        ${paymentPeriodSql.periodStart} AS period_start,
+        ${paymentPeriodSql.periodEnd} AS period_end,
+        p.media_id,
+        COALESCE(m.media_name, '') AS media_name,
+        NULLIF(TRIM(p.ad_code), '') AS ad_code,
+        COUNT(DISTINCT CASE
+          WHEN p.payment_count > 0 OR p.payment_amount > 0
+          THEN COALESCE(NULLIF(TRIM(p.customer_id), ''), CAST(p.id AS TEXT))
+        END) AS payer_count,
+        SUM(p.payment_amount) AS revenue
+      FROM payment_report_daily p
+      LEFT JOIN media_master m ON p.media_id = m.id
+      ${paymentWhere.whereSql}
+      GROUP BY period, period_start, period_end, p.media_id, m.media_name, ad_code
+    )`
+    : `
+    payment_agg AS (
+      SELECT
+        '' AS period,
+        '' AS period_start,
+        '' AS period_end,
+        NULL AS media_id,
+        '' AS media_name,
+        NULL AS ad_code,
+        0 AS payer_count,
+        0 AS revenue
+      WHERE 0
+    )`
 
   const detailSql = `
     WITH
@@ -347,21 +408,7 @@ analysisRoute.get('/summary', async (c) => {
       ${mediaSummaryWhere.whereSql}
       GROUP BY period, period_start, period_end, s.media_id, m.media_name, ad_code
     ),
-    payment_agg AS (
-      SELECT
-        ${paymentPeriodSql.period} AS period,
-        ${paymentPeriodSql.periodStart} AS period_start,
-        ${paymentPeriodSql.periodEnd} AS period_end,
-        p.media_id,
-        COALESCE(m.media_name, '') AS media_name,
-        NULLIF(TRIM(p.ad_code), '') AS ad_code,
-        SUM(p.payer_count) AS payer_count,
-        SUM(p.revenue) AS revenue
-      FROM payment_report_daily p
-      LEFT JOIN media_master m ON p.media_id = m.id
-      ${paymentWhere.whereSql}
-      GROUP BY period, period_start, period_end, p.media_id, m.media_name, ad_code
-    ),
+    ${paymentAggSql},
     base_keys AS (
       SELECT period, period_start, period_end, media_id, media_name, ad_code FROM ad_agg
       UNION

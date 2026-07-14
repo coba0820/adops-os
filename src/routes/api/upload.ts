@@ -59,12 +59,16 @@ type MediaSummaryDailyRow = {
 }
 
 type PaymentReportDailyRow = {
-  targetDate: string
-  mediaId: number | null
+  registrationDate: string
+  siteName: string
+  customerId: string
   adCode: string
-  payerKey?: string | null
-  payerCount: number
-  revenue: number
+  registrationStatus: string
+  firstPaymentAt: string | null
+  paymentCount: number
+  paymentAmount: number
+  mediaType: string
+  mediaId: number | null
   uploadHistoryId: number
 }
 
@@ -127,82 +131,16 @@ const MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
 }
 
 const PAYMENT_REPORT_HEADERS: Record<string, HeaderDefinition> = {
-  registrationDate: {
-    label: '登録日',
-    aliases: [
-      '登録日',
-      '登録日時',
-      '会員登録日',
-      'ユーザー登録日',
-      '登録完了日',
-      'Registration Date',
-      'Registered Date',
-      'Signup Date',
-      'Sign Up Date',
-      'registration_date',
-      'registered_at',
-      'signup_date',
-    ],
-  },
-  adCode: {
-    label: '広告コード',
-    aliases: [
-      '広告コード',
-      '広告CD',
-      '広告コード名',
-      'Ad Code',
-      'ad_code',
-      'Campaign ID',
-      'campaign_id',
-    ],
-  },
-  payerCount: {
-    label: '入金者数',
-    aliases: [
-      '入金者数',
-      '課金者数',
-      '決済者数',
-      '購入者数',
-      'Payers',
-      'Payer Count',
-      'payer_count',
-      'payment_user_count',
-    ],
-  },
-  payerId: {
-    label: '入金者ID',
-    aliases: [
-      '入金者ID',
-      '課金者ID',
-      '決済者ID',
-      'ユーザーID',
-      '会員ID',
-      '顧客ID',
-      'User ID',
-      'Member ID',
-      'Customer ID',
-      'user_id',
-      'member_id',
-      'customer_id',
-      'payer_id',
-    ],
-  },
-  revenue: {
-    label: '売上',
-    aliases: [
-      '売上',
-      '売上金額',
-      '入金額',
-      '決済金額',
-      '課金額',
-      'Revenue',
-      'Sales',
-      'Amount',
-      'Payment Amount',
-      'revenue',
-      'amount',
-    ],
-  },
+  siteName: { label: 'サイト', aliases: ['サイト', 'site', 'Site', 'site_name'] },
+  customerId: { label: '顧客ID', aliases: ['顧客ID', '顧客Id', '顧客id', 'customer_id', 'Customer ID'] },
+  adCode: { label: '広告コード', aliases: ['広告コード', '広告CD', '広告コード名', 'ad_code', 'Ad Code'] },
+  registrationStatus: { label: '登録状態', aliases: ['登録状態', 'registration_status', 'Registration Status'] },
+  registrationAt: { label: '登録日時', aliases: ['登録日時', '登録日', 'registration_at', 'registered_at', 'Registration Date'] },
+  firstPaymentAt: { label: '初回購入日時', aliases: ['初回購入日時', '初回課金日時', '初回決済日時', 'first_payment_at', 'First Payment At'] },
+  elapsedToFirstPayment: { label: '登録〜初回購入経過日時', aliases: ['登録〜初回購入経過日時', '登録～初回購入経過日時', '登録-初回購入経過日時', 'elapsed_to_first_payment'] },
+  paymentCount: { label: '入金回数', aliases: ['入金回数', '課金回数', '決済回数', 'payment_count', 'Payment Count'] },
+  paymentAmount: { label: '入金額', aliases: ['入金額', '売上', '売上金額', '課金額', '決済金額', 'payment_amount', 'Payment Amount'] },
+  mediaType: { label: '媒体種別', aliases: ['媒体種別', '媒体タイプ', 'media_type', 'Media Type'] },
 }
 
 function parseCsvText(text: string): CsvRows {
@@ -407,6 +345,12 @@ function parseTargetDate(value: unknown) {
   const raw = String(value ?? '').trim()
   if (!raw) return null
 
+  const ymdWithTime = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+\d{1,2}:\d{1,2}(?::\d{1,2})?)?/)
+  if (ymdWithTime) {
+    const [, year, month, day] = ymdWithTime
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+  }
+
   const ymd = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/)
   if (ymd) {
     const [, year, month, day] = ymd
@@ -428,6 +372,21 @@ function parseTargetDate(value: unknown) {
   const date = new Date(raw)
   if (Number.isNaN(date.getTime())) return null
   return date.toISOString().slice(0, 10)
+}
+
+function normalizeDateTime(value: unknown) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+
+  const ymdWithTime = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/)
+  if (ymdWithTime) {
+    const [, year, month, day, hour = '00', minute = '00', second = '00'] = ymdWithTime
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')} ${hour.padStart(2, '0')}:${minute.padStart(2, '0')}:${second.padStart(2, '0')}`
+  }
+
+  const date = new Date(raw)
+  if (Number.isNaN(date.getTime())) return raw
+  return date.toISOString().replace('T', ' ').slice(0, 19)
 }
 
 function isBlankRow(row: string[]) {
@@ -501,37 +460,27 @@ function aggregateMediaSummaryRows(rows: MediaSummaryDailyRow[]) {
 
 function aggregatePaymentReportRows(rows: PaymentReportDailyRow[]) {
   const rowsByKey = new Map<string, PaymentReportDailyRow>()
-  const payerKeysByKey = new Map<string, Set<string>>()
 
   for (const row of rows) {
     const key = [
-      row.targetDate,
+      row.registrationDate,
       row.mediaId ?? 'null',
       row.adCode || '',
+      row.customerId || '',
     ].join('|')
     const current = rowsByKey.get(key)
-    const payerKey = row.payerKey?.trim()
 
     if (!current) {
-      rowsByKey.set(key, {
-        ...row,
-        payerCount: payerKey ? 1 : row.payerCount,
-      })
-      if (payerKey) {
-        payerKeysByKey.set(key, new Set([payerKey]))
-      }
+      rowsByKey.set(key, { ...row })
       continue
     }
 
-    current.revenue += row.revenue
-    if (payerKey) {
-      const payerKeys = payerKeysByKey.get(key) ?? new Set<string>()
-      payerKeys.add(payerKey)
-      payerKeysByKey.set(key, payerKeys)
-      current.payerCount = payerKeys.size
-    } else {
-      current.payerCount += row.payerCount
-    }
+    current.paymentCount += row.paymentCount
+    current.paymentAmount += row.paymentAmount
+    current.siteName = row.siteName || current.siteName
+    current.registrationStatus = row.registrationStatus || current.registrationStatus
+    current.firstPaymentAt = row.firstPaymentAt || current.firstPaymentAt
+    current.mediaType = row.mediaType || current.mediaType
   }
 
   return [...rowsByKey.values()]
@@ -552,6 +501,10 @@ function getTargetDateRange(rows: Array<{ targetDate: string }>): TargetDateRang
       maxDate: rows[0].targetDate,
     }
   )
+}
+
+function getRegistrationDateRange(rows: PaymentReportDailyRow[]) {
+  return getTargetDateRange(rows.map((row) => ({ targetDate: row.registrationDate })))
 }
 
 function uniqueNumbers(values: Array<number | null>) {
@@ -636,7 +589,7 @@ async function deleteOldPaymentReportRowsInRange(
     const placeholders = chunk.map(() => '?').join(', ')
     await db.prepare(
       `DELETE FROM payment_report_daily
-       WHERE target_date BETWEEN ? AND ?
+       WHERE registration_date BETWEEN ? AND ?
          AND media_id IN (${placeholders})
          AND upload_history_id <> ?`
     )
@@ -656,7 +609,7 @@ async function deleteOldPaymentReportRowsInRange(
     const placeholders = chunk.map(() => '?').join(', ')
     await db.prepare(
       `DELETE FROM payment_report_daily
-       WHERE target_date BETWEEN ? AND ?
+       WHERE registration_date BETWEEN ? AND ?
          AND media_id IS NULL
          AND ad_code IN (${placeholders})
          AND upload_history_id <> ?`
@@ -831,28 +784,31 @@ async function buildPaymentReportDailyRows(
   }
 
   const headerIndex = buildHeaderIndex(headerRow)
-  const hasPayerCountHeader = hasHeader(headerIndex, PAYMENT_REPORT_HEADERS.payerCount.aliases)
-  const hasPayerIdHeader = hasHeader(headerIndex, PAYMENT_REPORT_HEADERS.payerId.aliases)
   logUploadInfo('buildPaymentReportDailyRows called', {
     csvRows: rows.length,
     bodyRows: countBodyRows(rows),
     headers: headerRow,
     normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
     dateBasis: 'registration_date',
-    hasPayerCountHeader,
-    hasPayerIdHeader,
   })
 
   ensureHeaders(headerIndex, [
-    PAYMENT_REPORT_HEADERS.registrationDate,
+    PAYMENT_REPORT_HEADERS.siteName,
+    PAYMENT_REPORT_HEADERS.customerId,
     PAYMENT_REPORT_HEADERS.adCode,
-    PAYMENT_REPORT_HEADERS.revenue,
+    PAYMENT_REPORT_HEADERS.registrationStatus,
+    PAYMENT_REPORT_HEADERS.registrationAt,
+    PAYMENT_REPORT_HEADERS.firstPaymentAt,
+    PAYMENT_REPORT_HEADERS.paymentCount,
+    PAYMENT_REPORT_HEADERS.paymentAmount,
+    PAYMENT_REPORT_HEADERS.mediaType,
   ])
 
   const parsedRows = bodyRows.filter((row) => !isBlankRow(row)).map((row, index) => {
-    const targetDate = parseTargetDate(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.registrationDate.aliases))
-    if (!targetDate) {
-      throw new Error(`${index + 2}行目の登録日が正しくありません`)
+    const registrationAt = getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.registrationAt.aliases)
+    const registrationDate = parseTargetDate(registrationAt)
+    if (!registrationDate) {
+      throw new Error(`${index + 2}行目の登録日時が正しくありません`)
     }
 
     const adCode = getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.adCode.aliases)
@@ -860,18 +816,21 @@ async function buildPaymentReportDailyRows(
       throw new Error(`${index + 2}行目の広告コードが空です`)
     }
 
-    const payerCountValue = hasPayerCountHeader
-      ? parseInteger(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.payerCount.aliases))
-      : 1
+    const customerId = getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.customerId.aliases)
+    if (!customerId) {
+      throw new Error(`${index + 2}行目の顧客IDが空です`)
+    }
 
     return {
-      targetDate,
+      registrationDate,
+      siteName: getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.siteName.aliases),
+      customerId,
       adCode,
-      payerKey: hasPayerIdHeader
-        ? getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.payerId.aliases)
-        : null,
-      payerCount: payerCountValue,
-      revenue: parseMoney(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.revenue.aliases)),
+      registrationStatus: getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.registrationStatus.aliases),
+      firstPaymentAt: normalizeDateTime(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.firstPaymentAt.aliases)),
+      paymentCount: parseInteger(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.paymentCount.aliases)),
+      paymentAmount: parseMoney(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.paymentAmount.aliases)),
+      mediaType: getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.mediaType.aliases),
       uploadHistoryId,
     }
   })
@@ -893,6 +852,21 @@ async function buildPaymentReportDailyRows(
   })
 
   return paymentRows
+}
+
+async function getExistingUploadDetailTables(db: D1Database) {
+  const placeholders = UPLOAD_DETAIL_TABLES.map(() => '?').join(', ')
+  const { results } = await db.prepare(
+    `SELECT name
+     FROM sqlite_master
+     WHERE type = 'table'
+       AND name IN (${placeholders})`
+  )
+    .bind(...UPLOAD_DETAIL_TABLES)
+    .all<{ name: string }>()
+
+  const existingNames = new Set(results.map((row) => row.name))
+  return UPLOAD_DETAIL_TABLES.filter((tableName) => existingNames.has(tableName))
 }
 
 uploadRoute.get('/', async (c) => {
@@ -1031,8 +1005,9 @@ uploadRoute.delete('/:id', async (c) => {
   }
 
   try {
+    const detailTables = await getExistingUploadDetailTables(c.env.DB)
     const statements = [
-      ...UPLOAD_DETAIL_TABLES.map((tableName) =>
+      ...detailTables.map((tableName) =>
         c.env.DB.prepare(`DELETE FROM ${tableName} WHERE upload_history_id = ?`)
           .bind(uploadHistoryId)
       ),
@@ -1041,14 +1016,14 @@ uploadRoute.delete('/:id', async (c) => {
     ]
 
     const results = await c.env.DB.batch(statements)
-    const deletedCounts = UPLOAD_DETAIL_TABLES.reduce<Record<string, number>>(
+    const deletedCounts = detailTables.reduce<Record<string, number>>(
       (counts, tableName, index) => {
         counts[tableName] = Number(results[index]?.meta?.changes ?? 0)
         return counts
       },
       {}
     )
-    deletedCounts.upload_history = Number(results[UPLOAD_DETAIL_TABLES.length]?.meta?.changes ?? 0)
+    deletedCounts.upload_history = Number(results[detailTables.length]?.meta?.changes ?? 0)
 
     return c.json<ApiResponse<{
       id: number
@@ -1235,7 +1210,7 @@ uploadRoute.post('/', async (c) => {
           0
         )
       )
-      paymentReportDateRange = getTargetDateRange(preparedPaymentReportRows)
+      paymentReportDateRange = getRegistrationDateRange(preparedPaymentReportRows)
 
       logUploadInfo('payment_report_daily prepared rows', {
         preparedRows: preparedPaymentReportRows.length,
@@ -1436,14 +1411,21 @@ uploadRoute.post('/', async (c) => {
           chunk.map((row) =>
             c.env.DB.prepare(
               `INSERT OR REPLACE INTO payment_report_daily
-                 (target_date, media_id, ad_code, payer_count, revenue, upload_history_id)
-               VALUES (?, ?, ?, ?, ?, ?)`
+                 (registration_date, site_name, customer_id, ad_code,
+                  registration_status, first_payment_at, payment_count,
+                  payment_amount, media_type, media_id, upload_history_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             ).bind(
-              row.targetDate,
-              row.mediaId,
+              row.registrationDate,
+              row.siteName,
+              row.customerId,
               row.adCode,
-              row.payerCount,
-              row.revenue,
+              row.registrationStatus,
+              row.firstPaymentAt,
+              row.paymentCount,
+              row.paymentAmount,
+              row.mediaType,
+              row.mediaId,
               uploadHistoryId
             )
           )
