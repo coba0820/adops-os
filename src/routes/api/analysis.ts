@@ -330,6 +330,7 @@ function buildSummary(rows: AnalysisRow[]) {
 }
 
 analysisRoute.get('/summary', async (c) => {
+  try {
   const startDate = parseDateParam(c.req.query('start_date') ?? null)
   const endDate = parseDateParam(c.req.query('end_date') ?? null)
   const mediaId = parseMediaIdParam(c.req.query('media_id') ?? null)
@@ -380,7 +381,12 @@ analysisRoute.get('/summary', async (c) => {
       LEFT JOIN unique_campaign_media pm_unique
         ON NULLIF(TRIM(p.ad_code), '') = pm_unique.ad_code
       ${paymentWhere.whereSql}
-      GROUP BY period, period_start, period_end, media_id, ad_code
+      GROUP BY
+        period,
+        period_start,
+        period_end,
+        COALESCE(p.media_id, pm_unique.media_id),
+        NULLIF(TRIM(p.ad_code), '')
     )`
     : `
     payment_agg AS (
@@ -448,7 +454,12 @@ analysisRoute.get('/summary', async (c) => {
         SUM(clicks) AS clicks,
         SUM(media_cv) AS media_cv
       FROM ad_base
-      GROUP BY period, period_start, period_end, media_id, ad_code
+      GROUP BY
+        period,
+        period_start,
+        period_end,
+        media_id,
+        ad_code
     ),
     summary_agg AS (
       SELECT
@@ -464,7 +475,12 @@ analysisRoute.get('/summary', async (c) => {
       LEFT JOIN unique_campaign_media sm_unique
         ON NULLIF(TRIM(s.ad_code), '') = sm_unique.ad_code
       ${mediaSummaryWhere.whereSql}
-      GROUP BY period, period_start, period_end, media_id, ad_code
+      GROUP BY
+        period,
+        period_start,
+        period_end,
+        COALESCE(s.media_id, sm_unique.media_id),
+        NULLIF(TRIM(s.ad_code), '')
     ),
     ${paymentAggSql},
     base_keys AS (
@@ -555,4 +571,16 @@ analysisRoute.get('/summary', async (c) => {
       rows,
     },
   })
+  } catch (err) {
+    console.error('[api/analysis/summary] failed', err)
+    const error = err instanceof Error ? err : new Error(String(err))
+    return c.json<ApiResponse<null> & { stack?: string }>(
+      {
+        success: false,
+        error: error.message,
+        stack: error.stack,
+      },
+      500
+    )
+  }
 })
