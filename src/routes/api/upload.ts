@@ -295,7 +295,7 @@ function ensureHeaders(headerIndex: Map<string, number>, definitions: HeaderDefi
     .map((definition) => definition.label)
 
   if (missingHeaders.length > 0) {
-    throw new Error(`CSVに必要な列がありません: ${missingHeaders.join(', ')}`)
+    throw new Error(`ファイルに必要な列がありません: ${missingHeaders.join(', ')}`)
   }
 }
 

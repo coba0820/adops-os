@@ -16,7 +16,8 @@
     "db:console:local": "wrangler d1 execute adops-os-db --local"
   },
   "dependencies": {
-    "hono": "^4.12.27"
+    "hono": "^4.12.27",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@hono/vite-build": "^1.2.0",

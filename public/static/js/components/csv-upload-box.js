@@ -6,9 +6,12 @@
 // 広告媒体CSVは日次実績も保存し、それ以外は履歴だけAPIに記録する。
 // ============================================================
 import { parseCsv } from './csv-parser.js'
+import { parseXlsxFile } from './xlsx-parser.js'
 import { showToast } from './toast.js'
 
 const PREVIEW_MAX_ROWS = 20 // プレビューに表示する最大行数（ヘッダ除く）
+const MAX_UPLOAD_SIZE = 25 * 1024 * 1024
+const SUPPORTED_EXTENSIONS = ['csv', 'xlsx']
 
 /**
  * CSVアップロードボックスを指定要素内に構築する
@@ -45,11 +48,12 @@ export function mountCsvUploadBox(rootEl, options) {
   rootEl.innerHTML = `
     ${mediaSelectHtml}
     <div class="form-row">
-      <label class="form-label">CSVファイル</label>
+      <label class="form-label">取込ファイル</label>
       <div id="${id}-dropzone" class="upload-dropzone">
-        <input type="file" id="${id}-file-input" accept=".csv" style="display:none" />
+        <input type="file" id="${id}-file-input" accept=".csv,.xlsx" style="display:none" />
         <i class="fa-solid fa-file-arrow-up"></i>
-        <div class="upload-dropzone-text">クリックしてCSVファイルを選択、またはドラッグ&ドロップ</div>
+        <div class="upload-dropzone-text">クリックしてCSVまたはExcelファイルを選択、またはドラッグ&ドロップ</div>
+        <div class="form-hint">対応形式：CSV / XLSX</div>
         <div id="${id}-filename" class="upload-dropzone-filename"></div>
       </div>
     </div>
@@ -88,11 +92,25 @@ export function mountCsvUploadBox(rootEl, options) {
   })
 
   /**
-   * 選択/ドロップされたCSVファイルを読み込み、プレビューを描画する
+   * 選択/ドロップされたファイルを読み込み、プレビューを描画する
    */
-  function handleFile(file) {
-    if (!file.name.toLowerCase().endsWith('.csv')) {
-      showToast('CSVファイルを選択してください', 'error')
+  async function handleFile(file) {
+    const fileFormat = getFileFormat(file.name)
+    if (!SUPPORTED_EXTENSIONS.includes(fileFormat)) {
+      showToast('未対応の拡張子です。CSVまたはXLSXを選択してください', 'error')
+      fileInput.value = ''
+      return
+    }
+
+    if (file.name.toLowerCase().endsWith('.xlsm') || file.name.toLowerCase().endsWith('.xls')) {
+      showToast('対応しているExcel形式は .xlsx のみです', 'error')
+      fileInput.value = ''
+      return
+    }
+
+    if (file.size > MAX_UPLOAD_SIZE) {
+      showToast(`ファイルサイズが大きすぎます。${formatFileSize(MAX_UPLOAD_SIZE)}以下のファイルを選択してください`, 'error')
+      fileInput.value = ''
       return
     }
 
@@ -103,52 +121,63 @@ export function mountCsvUploadBox(rootEl, options) {
       return
     }
 
-    filenameEl.textContent = `選択中: ${file.name}`
+    filenameEl.innerHTML = `
+      <div>選択中: ${escapeHtml(file.name)}</div>
+      <div class="form-hint">形式: ${fileFormat.toUpperCase()} / サイズ: ${formatFileSize(file.size)}</div>
+    `
 
-    const reader = new FileReader()
-    reader.onload = async (event) => {
-      const text = event.target.result
-      const rows = parseCsv(text)
+    try {
+      const parsed = await parseFile(file, fileFormat)
+      const { rows, text, sheetName } = parsed
 
       if (rows.length === 0) {
-        previewArea.innerHTML = `<div class="empty-state">CSVにデータがありません</div>`
+        previewArea.innerHTML = `<div class="empty-state">ファイルにデータがありません</div>`
         return
       }
 
-      renderPreview(previewArea, rows)
-
-      const rowCount = rows.length
-
-      // アップロード履歴をAPIに記録し、広告媒体CSVは実績行も保存する
-      try {
-        await axios.post('/api/upload', {
-          file_type: fileType,
-          media_id: showMediaSelect && mediaSelect ? Number(mediaSelect.value) : null,
-          file_name: file.name,
-          row_count: rowCount,
-          csv_rows: shouldSendCsvRows(fileType) ? rows : undefined,
-          csv_text: shouldSendCsvRows(fileType) ? text : undefined,
-        })
-        if (fileType === 'ad_media_csv') {
-          showToast('広告媒体CSVの実績を保存しました', 'success')
-        } else if (fileType === 'site_summary_csv') {
-          showToast('媒体集計CSVの実績を保存しました', 'success')
-        } else if (fileType === 'payment_report_csv') {
-          showToast('決済レポートCSVの実績を保存しました', 'success')
-        } else {
-          showToast(`「${file.name}」を取込みました（${rowCount}行）`, 'success')
-        }
-        onUploadSuccess({
-          file_type: fileType,
-          file_name: file.name,
-          row_count: rowCount,
-        })
-      } catch (err) {
-        console.error(err)
-        showToast(err.response?.data?.error || 'アップロード履歴の記録に失敗しました', 'error')
+      if (!rows[0] || rows[0].every((cell) => String(cell ?? '').trim() === '')) {
+        previewArea.innerHTML = `<div class="empty-state">ヘッダー行がありません</div>`
+        return
       }
+
+      if (countBodyRows(rows) === 0) {
+        previewArea.innerHTML = `<div class="empty-state">行データがありません</div>`
+        return
+      }
+
+      renderPreview(previewArea, rows, {
+        fileFormat,
+        sheetName,
+      })
+
+      const rowCount = countBodyRows(rows)
+
+      await axios.post('/api/upload', {
+        file_type: fileType,
+        media_id: showMediaSelect && mediaSelect ? Number(mediaSelect.value) : null,
+        file_name: file.name,
+        row_count: rowCount,
+        csv_rows: shouldSendCsvRows(fileType) ? rows : undefined,
+        csv_text: shouldSendCsvRows(fileType) && fileFormat === 'csv' ? text : undefined,
+      })
+      if (fileType === 'ad_media_csv') {
+        showToast(`広告媒体${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
+      } else if (fileType === 'site_summary_csv') {
+        showToast(`媒体集計${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
+      } else if (fileType === 'payment_report_csv') {
+        showToast(`決済レポート${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
+      } else {
+        showToast(`「${file.name}」を取込みました（${rowCount}行）`, 'success')
+      }
+      onUploadSuccess({
+        file_type: fileType,
+        file_name: file.name,
+        row_count: rowCount,
+      })
+    } catch (err) {
+      console.error(err)
+      showToast(err.response?.data?.error || err.message || 'ファイルの解析または保存に失敗しました', 'error')
     }
-    reader.readAsText(file, 'UTF-8')
   }
 }
 
@@ -162,9 +191,11 @@ function shouldSendCsvRows(fileType) {
  * CSVプレビュー用のテーブルを描画する
  * 先頭行をヘッダーとして扱い、以降を最大PREVIEW_MAX_ROWS行だけ表示する
  */
-function renderPreview(previewArea, rows) {
+function renderPreview(previewArea, rows, meta = {}) {
   const [header, ...body] = rows
-  const displayRows = body.slice(0, PREVIEW_MAX_ROWS)
+  const nonBlankBody = body.filter((row) => !isBlankRow(row))
+  const displayRows = nonBlankBody.slice(0, PREVIEW_MAX_ROWS)
+  const firstRow = nonBlankBody[0] || []
 
   const headHtml = header.map((h) => `<th>${escapeHtml(h)}</th>`).join('')
   const bodyHtml = displayRows
@@ -175,8 +206,10 @@ function renderPreview(previewArea, rows) {
     <div class="form-row">
       <div class="form-hint">
         <i class="fa-solid fa-circle-info"></i>
-        プレビュー: 全${body.length}件中 先頭${displayRows.length}件を表示（保存・分析はv1では未対応）
+        認識したヘッダー: ${header.length}列 / 総行数: ${nonBlankBody.length}件 / 先頭${displayRows.length}件を表示
+        ${meta.fileFormat === 'xlsx' && meta.sheetName ? ` / シート: ${escapeHtml(meta.sheetName)}` : ''}
       </div>
+      <div class="form-hint">先頭行: ${escapeHtml(firstRow.slice(0, 6).join(' / ') || '-')}</div>
     </div>
     <div class="table-scroll">
       <table class="data-table">
@@ -185,6 +218,51 @@ function renderPreview(previewArea, rows) {
       </table>
     </div>
   `
+}
+
+async function parseFile(file, fileFormat) {
+  if (fileFormat === 'csv') {
+    const text = await readFileAsText(file)
+    const rows = parseCsv(text)
+    if (rows.length === 0) throw new Error('CSVにデータがありません。')
+    return { rows, text, sheetName: null }
+  }
+
+  if (fileFormat === 'xlsx') {
+    return parseXlsxFile(file)
+  }
+
+  throw new Error('未対応のファイル形式です。')
+}
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (event) => resolve(String(event.target.result || ''))
+    reader.onerror = () => reject(new Error('CSVファイルの読み込みに失敗しました。'))
+    reader.readAsText(file, 'UTF-8')
+  })
+}
+
+function getFileFormat(fileName) {
+  const match = String(fileName || '').toLowerCase().match(/\.([^.]+)$/)
+  return match ? match[1] : ''
+}
+
+function countBodyRows(rows) {
+  return rows.slice(1).filter((row) => !isBlankRow(row)).length
+}
+
+function isBlankRow(row) {
+  return row.every((cell) => String(cell ?? '').trim() === '')
+}
+
+function formatFileSize(bytes) {
+  const size = Number(bytes)
+  if (!Number.isFinite(size)) return '-'
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)}MB`
+  if (size >= 1024) return `${(size / 1024).toFixed(1)}KB`
+  return `${size}B`
 }
 
 /**
