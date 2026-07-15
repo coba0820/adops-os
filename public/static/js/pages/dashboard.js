@@ -12,17 +12,19 @@ export async function renderDashboardPage(container) {
 
   try {
     const { data } = (await axios.get('/api/dashboard/summary')).data
+    const visibility = data.settings?.dashboard || {}
 
     container.innerHTML = `
       <div class="dashboard-stack">
-        ${renderKpiSection(data.kpis)}
-        ${renderAlertsSection(data.alerts)}
-        ${renderForecastSection(data.forecast_summary, data.days_remaining)}
-        ${renderMonthlySummary(data.target_month, data.monthly_summary)}
-        ${renderMonthlyProgress(data.monthly_progress)}
-        ${renderEntitySummary('媒体別サマリー', '媒体名', data.media_summary)}
-        ${renderEntitySummary('サイト別サマリー', 'サイト名', data.site_summary)}
-        ${renderTodoSection(data.todos)}
+        ${visibility.show_today_kpi !== false ? renderKpiSection(data.kpis) : ''}
+        ${visibility.show_alerts !== false ? renderAlertsSection(data.alerts) : ''}
+        ${visibility.show_forecast_summary !== false ? renderForecastSection(data.forecast_summary, data.days_remaining) : ''}
+        ${visibility.show_monthly_summary !== false ? renderMonthlySummary(data.target_month, data.monthly_summary) : ''}
+        ${visibility.show_monthly_progress !== false ? renderMonthlyProgress(data.monthly_progress) : ''}
+        ${visibility.show_media_summary !== false ? renderEntitySummary('媒体別サマリー', '媒体名', data.media_summary) : ''}
+        ${visibility.show_site_summary !== false ? renderEntitySummary('サイト別サマリー', 'サイト名', data.site_summary) : ''}
+        ${visibility.show_csv_status !== false ? renderCsvStatus(data.data_status) : ''}
+        ${visibility.show_todos !== false ? renderTodoSection(data.todos) : ''}
       </div>
     `
 
@@ -253,6 +255,35 @@ function renderTodoSection(todos) {
         </div>
       </div>
       <div class="todo-list">${items}</div>
+    </div>
+  `
+}
+
+function renderCsvStatus(status) {
+  const items = [
+    ['稼働中媒体', `${formatInteger(status?.active_media_count)}件`],
+    ['広告媒体CSV未取込', `${formatInteger(status?.missing_ad_media_count)}件`],
+    ['媒体集計CSV', status?.site_summary_uploaded_today ? '取込済' : '未取込'],
+    ['決済レポートCSV', status?.payment_report_uploaded_today ? '取込済' : '未取込'],
+  ]
+
+  return `
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title"><i class="fa-solid fa-file-circle-check"></i>CSV取込状況</div>
+          <div class="card-subtitle">今日の取込対象の概要</div>
+        </div>
+        <button class="btn btn-secondary" data-route="data-import">詳細を見る</button>
+      </div>
+      <div class="dashboard-summary-grid">
+        ${items.map(([label, value]) => `
+          <div class="dashboard-summary-item">
+            <div class="dashboard-section-label">${escapeHtml(label)}</div>
+            <div class="kpi-value">${escapeHtml(value)}</div>
+          </div>
+        `).join('')}
+      </div>
     </div>
   `
 }

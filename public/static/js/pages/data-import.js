@@ -44,22 +44,33 @@ export async function renderDataImportPage(container) {
   container.innerHTML = `<div class="empty-state">読み込み中...</div>`
 
   let mediaList = []
+  let appSettings = null
   try {
-    const res = await axios.get('/api/media')
-    mediaList = res.data.data || []
+    const [mediaRes, settingsRes] = await Promise.all([
+      axios.get('/api/media'),
+      axios.get('/api/settings'),
+    ])
+    mediaList = mediaRes.data.data || []
+    appSettings = settingsRes.data.data?.settings || null
   } catch (err) {
     console.error(err)
   }
 
   const activeMediaList = mediaList.filter((m) => normalizeMediaStatus(m.status) === 'active')
-  let activeTab = TABS[0].key
+  const enabledTabs = TABS.filter((tab) => isImportTabEnabled(tab.key, appSettings))
+  let activeTab = enabledTabs[0]?.key || TABS[0].key
 
   function draw() {
-    const tabBarHtml = TABS.map(
+    const tabBarHtml = enabledTabs.map(
       (t) => `<div class="tab-item ${t.key === activeTab ? 'active' : ''}" data-tab="${t.key}">${t.label}</div>`
     ).join('')
 
-    const currentTab = TABS.find((t) => t.key === activeTab)
+    const currentTab = enabledTabs.find((t) => t.key === activeTab)
+
+    if (!currentTab) {
+      container.innerHTML = `<div class="card"><div class="empty-state">設定で有効化されている取込対象CSVがありません</div></div>`
+      return
+    }
 
     container.innerHTML = `
       <div class="card">
@@ -306,6 +317,14 @@ function getFileTypeLabel(fileType) {
 
 function normalizeMediaStatus(status) {
   return status === 'paused' || status === 'archived' ? status : 'active'
+}
+
+function isImportTabEnabled(fileType, settings) {
+  const importSettings = settings?.import || {}
+  if (fileType === 'ad_media_csv') return importSettings.enable_ad_media_csv !== false
+  if (fileType === 'site_summary_csv') return importSettings.enable_site_summary_csv !== false
+  if (fileType === 'payment_report_csv') return importSettings.enable_payment_report_csv !== false
+  return true
 }
 
 function clampPercent(value) {

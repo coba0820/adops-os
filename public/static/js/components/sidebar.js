@@ -16,7 +16,7 @@ export const MENU_ITEMS = [
   { key: 'analysis', label: '実績分析', icon: 'fa-chart-line', comingSoon: false },
   { key: 'budget', label: '予算管理', icon: 'fa-wallet', comingSoon: false },
   { key: 'forecast', label: '着地予測', icon: 'fa-chart-simple', comingSoon: false },
-  { key: 'settings', label: '設定', icon: 'fa-gear', comingSoon: true },
+  { key: 'settings', label: '設定', icon: 'fa-gear', comingSoon: false },
 ]
 
 /**

@@ -1266,6 +1266,111 @@ button {
   color: var(--color-text-primary);
 }
 
+/* 設定 */
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-field,
+.settings-toggle-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+
+.settings-field span,
+.settings-toggle-row span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.settings-toggle-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-toggle-row input[type="checkbox"] {
+  width: 38px;
+  height: 20px;
+  accent-color: var(--color-primary);
+}
+
+.settings-number-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-number-wrap input {
+  min-width: 0;
+}
+
+.settings-number-wrap em {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.settings-policy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-policy-item {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+
+.settings-policy-item strong {
+  color: var(--color-text-primary);
+}
+
+.settings-policy-item span {
+  color: var(--color-text-secondary);
+}
+
+.settings-system-table th {
+  width: 220px;
+  text-align: left;
+  color: var(--color-text-secondary);
+  background: var(--color-bg);
+}
+
+.settings-actions {
+  position: sticky;
+  bottom: 16px;
+  z-index: 10;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow-md);
+}
+
 @media (max-width: 1000px) {
   .analysis-filter-bar,
   .analysis-summary-grid {

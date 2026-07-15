@@ -25,6 +25,8 @@ let forecastState = {
 
 export async function renderForecastPage(container) {
   container.innerHTML = `<div class="card"><div class="empty-state">読み込み中...</div></div>`
+  const settings = await fetchSettings()
+  forecastState.targetMonth = getDefaultTargetMonth(settings.display?.default_target_month)
 
   async function draw() {
     try {
@@ -265,6 +267,22 @@ function isNumber(value) {
 
 function getCurrentMonth() {
   const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+}
+
+async function fetchSettings() {
+  try {
+    const res = await axios.get('/api/settings')
+    return res.data.data?.settings || {}
+  } catch (err) {
+    console.error(err)
+    return {}
+  }
+}
+
+function getDefaultTargetMonth(mode = 'current') {
+  const now = new Date()
+  if (mode === 'previous') now.setMonth(now.getMonth() - 1)
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 }
 

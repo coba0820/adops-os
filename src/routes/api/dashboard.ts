@@ -4,6 +4,7 @@
 // ============================================================
 import { Hono } from 'hono'
 import type { ApiResponse, Bindings, MediaStatus } from '../../types'
+import { fetchAppSettings } from '../../lib/settings'
 
 export const dashboardRoute = new Hono<{ Bindings: Bindings }>()
 
@@ -595,26 +596,34 @@ function buildAlerts(
   actual: ActualTotals,
   targets: TargetTotals,
   forecast: ReturnType<typeof buildForecastSummary>,
-  uploadStatus: Awaited<ReturnType<typeof fetchUploadStatus>>
+  uploadStatus: Awaited<ReturnType<typeof fetchUploadStatus>>,
+  settings: Awaited<ReturnType<typeof fetchAppSettings>>
 ) {
   const alerts: DashboardAlert[] = []
   const currentCpa = divideOrNull(actual.cost, actual.registrations)
+  const alertSettings = settings.alerts ?? {}
+  const cpaWarningRate = toNumber(alertSettings.cpa_warning_rate) || 1.1
+  const cpaCriticalRate = toNumber(alertSettings.cpa_critical_rate) || 1.2
+  const registrationWarningRate = toNumber(alertSettings.registration_warning_rate) || 0.9
+  const registrationCriticalRate = toNumber(alertSettings.registration_critical_rate) || 0.8
+  const budgetWarningRate = toNumber(alertSettings.budget_warning_rate) || 1.05
+  const budgetCriticalRate = toNumber(alertSettings.budget_critical_rate) || 1.1
 
-  if (targets.targetCpa && currentCpa && currentCpa > targets.targetCpa * 1.1) {
+  if (targets.targetCpa && currentCpa && currentCpa > targets.targetCpa * cpaWarningRate) {
     alerts.push({
-      level: 'critical',
+      level: currentCpa > targets.targetCpa * cpaCriticalRate ? 'critical' : 'warning',
       title: 'CPA超過',
-      detail: `月間CPAが目標を10%以上超えています`,
+      detail: `月間CPAが設定閾値を超えています`,
       route: 'analysis',
     })
   }
   if (
     targets.targetRegistrations &&
     forecast.registrations.forecast !== null &&
-    forecast.registrations.forecast < targets.targetRegistrations * 0.9
+    forecast.registrations.forecast < targets.targetRegistrations * registrationWarningRate
   ) {
     alerts.push({
-      level: 'warning',
+      level: forecast.registrations.forecast < targets.targetRegistrations * registrationCriticalRate ? 'critical' : 'warning',
       title: '登録不足',
       detail: '現在のペースでは登録数が目標未達見込みです',
       route: 'forecast',
@@ -623,16 +632,19 @@ function buildAlerts(
   if (
     targets.monthlyBudget &&
     forecast.cost.forecast !== null &&
-    forecast.cost.forecast > targets.monthlyBudget * 1.05
+    forecast.cost.forecast > targets.monthlyBudget * budgetWarningRate
   ) {
     alerts.push({
-      level: 'critical',
+      level: forecast.cost.forecast > targets.monthlyBudget * budgetCriticalRate ? 'critical' : 'warning',
       title: '予算超過見込み',
-      detail: '月末着地が月予算を5%以上超える見込みです',
+      detail: '月末着地が設定した予算閾値を超える見込みです',
       route: 'forecast',
     })
   }
-  if (uploadStatus.missingAdMedia.length > 0 || !uploadStatus.hasSiteSummary) {
+  if (
+    (alertSettings.warn_missing_ad_media_csv !== false && uploadStatus.missingAdMedia.length > 0) ||
+    (alertSettings.warn_missing_site_summary_csv !== false && !uploadStatus.hasSiteSummary)
+  ) {
     alerts.push({
       level: 'warning',
       title: 'CSV未取込',
@@ -640,7 +652,7 @@ function buildAlerts(
       route: 'data-import',
     })
   }
-  if (!uploadStatus.hasPaymentReport) {
+  if (alertSettings.warn_missing_payment_report_csv !== false && !uploadStatus.hasPaymentReport) {
     alerts.push({
       level: 'info',
       title: '決済CSV未取込',
@@ -705,8 +717,9 @@ function buildTodos(
 dashboardRoute.get('/summary', async (c) => {
   const monthInfo = getMonthInfo()
   const hasPayment = await paymentReportAvailable(c.env.DB)
-  const [plans, masters, todayActual, yesterdayActual, monthlyActual, mediaActuals, siteActuals, uploadStatus] =
+  const [settings, plans, masters, todayActual, yesterdayActual, monthlyActual, mediaActuals, siteActuals, uploadStatus] =
     await Promise.all([
+      fetchAppSettings(c.env.DB),
       fetchBudgetPlans(c.env.DB, monthInfo.targetMonth),
       fetchMasters(c.env.DB),
       fetchActualTotals(c.env.DB, monthInfo.today, monthInfo.today, hasPayment),
@@ -734,7 +747,7 @@ dashboardRoute.get('/summary', async (c) => {
     'site',
     multiplier
   )
-  const alerts = buildAlerts(monthlyActual, targets, forecast, uploadStatus)
+  const alerts = buildAlerts(monthlyActual, targets, forecast, uploadStatus, settings)
 
   const data = {
     generated_at: new Date().toISOString(),
@@ -758,6 +771,9 @@ dashboardRoute.get('/summary', async (c) => {
       missing_ad_media_count: uploadStatus.missingAdMedia.length,
       site_summary_uploaded_today: uploadStatus.hasSiteSummary,
       payment_report_uploaded_today: uploadStatus.hasPaymentReport,
+    },
+    settings: {
+      dashboard: settings.dashboard,
     },
   }
 

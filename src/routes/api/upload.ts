@@ -8,6 +8,7 @@ import type {
   UploadHistoryView,
   UploadStatusItem,
 } from '../../types'
+import { fetchAppSettings } from '../../lib/settings'
 
 export const uploadRoute = new Hono<{ Bindings: Bindings }>()
 
@@ -21,6 +22,17 @@ const COMMON_REQUIRED_FILE_TYPES: UploadFileType[] = [
   'site_summary_csv',
   'payment_report_csv',
 ]
+
+function isUploadFileTypeEnabled(
+  fileType: UploadFileType,
+  settings: Awaited<ReturnType<typeof fetchAppSettings>>
+) {
+  const importSettings = settings.import ?? {}
+  if (fileType === 'ad_media_csv') return importSettings.enable_ad_media_csv !== false
+  if (fileType === 'site_summary_csv') return importSettings.enable_site_summary_csv !== false
+  if (fileType === 'payment_report_csv') return importSettings.enable_payment_report_csv !== false
+  return true
+}
 
 const UPLOAD_DETAIL_TABLES = [
   'ad_media_daily',
@@ -887,7 +899,7 @@ uploadRoute.get('/', async (c) => {
 })
 
 uploadRoute.get('/today', async (c) => {
-  const [{ results: activeMedia }, { results: todayUploads }, today] =
+  const [{ results: activeMedia }, { results: todayUploads }, today, settings] =
     await Promise.all([
       c.env.DB.prepare(
         `SELECT id, media_name, status, created_at, updated_at
@@ -908,6 +920,7 @@ uploadRoute.get('/today', async (c) => {
       c.env.DB.prepare(
         `SELECT date('now', '+9 hours') as target_date`
       ).first<{ target_date: string }>(),
+      fetchAppSettings(c.env.DB),
     ])
 
   const latestAdMediaUploads = new Map<number, UploadHistoryView>()
@@ -933,19 +946,23 @@ uploadRoute.get('/today', async (c) => {
     }
   }
 
-  const mediaItems: UploadStatusItem[] = activeMedia.map((media) => {
-    const latestUpload = latestAdMediaUploads.get(media.id) ?? null
-    return {
-      file_type: 'ad_media_csv',
-      label: UPLOAD_FILE_TYPE_LABELS.ad_media_csv,
-      media_id: media.id,
-      media_name: media.media_name,
-      uploaded: latestUpload !== null,
-      latest_upload: latestUpload,
-    }
-  })
+  const mediaItems: UploadStatusItem[] = isUploadFileTypeEnabled('ad_media_csv', settings)
+    ? activeMedia.map((media) => {
+      const latestUpload = latestAdMediaUploads.get(media.id) ?? null
+      return {
+        file_type: 'ad_media_csv',
+        label: UPLOAD_FILE_TYPE_LABELS.ad_media_csv,
+        media_id: media.id,
+        media_name: media.media_name,
+        uploaded: latestUpload !== null,
+        latest_upload: latestUpload,
+      }
+    })
+    : []
 
-  const commonItems: UploadStatusItem[] = COMMON_REQUIRED_FILE_TYPES.map(
+  const commonItems: UploadStatusItem[] = COMMON_REQUIRED_FILE_TYPES.filter(
+    (fileType) => isUploadFileTypeEnabled(fileType, settings)
+  ).map(
     (fileType) => {
       const latestUpload = latestCommonUploads.get(fileType) ?? null
       return {
@@ -1066,6 +1083,14 @@ uploadRoute.post('/', async (c) => {
   if (!fileType || !fileName) {
     return c.json<ApiResponse<null>>(
       { success: false, error: 'file_type と file_name は必須です' },
+      400
+    )
+  }
+
+  const settings = await fetchAppSettings(c.env.DB)
+  if (!isUploadFileTypeEnabled(fileType, settings)) {
+    return c.json<ApiResponse<null>>(
+      { success: false, error: `${UPLOAD_FILE_TYPE_LABELS[fileType]}は設定で無効化されています` },
       400
     )
   }

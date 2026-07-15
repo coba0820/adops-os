@@ -23,10 +23,12 @@ let budgetState = {
 
 export async function renderBudgetPage(container) {
   container.innerHTML = `<div class="card"><div class="empty-state">読み込み中...</div></div>`
-  const [mediaList, siteList] = await Promise.all([
+  const [mediaList, siteList, settings] = await Promise.all([
     fetchOptions('/api/media'),
     fetchOptions('/api/site'),
+    fetchSettings(),
   ])
+  budgetState.targetMonth = getDefaultTargetMonth(settings.display?.default_target_month)
 
   async function draw() {
     try {
@@ -534,6 +536,22 @@ async function fetchOptions(url) {
     console.error(err)
     return []
   }
+}
+
+async function fetchSettings() {
+  try {
+    const res = await axios.get('/api/settings')
+    return res.data.data?.settings || {}
+  } catch (err) {
+    console.error(err)
+    return {}
+  }
+}
+
+function getDefaultTargetMonth(mode = 'current') {
+  const now = new Date()
+  if (mode === 'previous') now.setMonth(now.getMonth() - 1)
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 }
 
 function clampPercent(value) {

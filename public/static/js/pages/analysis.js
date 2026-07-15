@@ -48,14 +48,26 @@ const GROUP_LABELS = {
   monthly: '月別',
 }
 
+let analysisDisplaySettings = {
+  default_group_by: 'daily',
+  default_target_month: 'current',
+  money_decimal_digits: 0,
+  percent_decimal_digits: 1,
+  count_decimal_digits: 0,
+}
+
 export async function renderAnalysisPage(container) {
   container.innerHTML = `<div class="empty-state">読み込み中...</div>`
 
-  const mediaList = await fetchMediaList()
-  const adCodeList = await fetchAdCodeList()
-  const defaultDateRange = getDefaultDateRange()
+  const [mediaList, adCodeList, settings] = await Promise.all([
+    fetchMediaList(),
+    fetchAdCodeList(),
+    fetchSettings(),
+  ])
+  analysisDisplaySettings = { ...analysisDisplaySettings, ...settings.display }
+  const defaultDateRange = getDefaultDateRange(analysisDisplaySettings.default_target_month)
   const state = {
-    groupBy: 'daily',
+    groupBy: analysisDisplaySettings.default_group_by || 'daily',
     startDate: defaultDateRange.startDate,
     endDate: defaultDateRange.endDate,
     mediaId: '',
@@ -175,8 +187,8 @@ function bindFilterEvents(container, state, redraw) {
   })
 
   container.querySelector('#analysis-filter-reset')?.addEventListener('click', () => {
-    const defaultDateRange = getDefaultDateRange()
-    state.groupBy = 'daily'
+    const defaultDateRange = getDefaultDateRange(analysisDisplaySettings.default_target_month)
+    state.groupBy = analysisDisplaySettings.default_group_by || 'daily'
     state.startDate = defaultDateRange.startDate
     state.endDate = defaultDateRange.endDate
     state.mediaId = ''
@@ -308,14 +320,25 @@ async function fetchAdCodeList() {
   }
 }
 
+async function fetchSettings() {
+  try {
+    const res = await axios.get('/api/settings')
+    return res.data.data?.settings || {}
+  } catch (err) {
+    console.error(err)
+    return {}
+  }
+}
+
 function isDisplayableNumber(value) {
   return value !== null && value !== undefined && Number.isFinite(Number(value))
 }
 
-function getDefaultDateRange() {
-  const end = new Date()
-  const start = new Date()
-  start.setDate(end.getDate() - 29)
+function getDefaultDateRange(defaultTargetMonth = 'current') {
+  const now = new Date()
+  const target = new Date(now.getFullYear(), now.getMonth() + (defaultTargetMonth === 'previous' ? -1 : 0), 1)
+  const start = new Date(target.getFullYear(), target.getMonth(), 1)
+  const end = new Date(target.getFullYear(), target.getMonth() + 1, 0)
 
   return {
     startDate: formatInputDate(start),
@@ -332,22 +355,31 @@ function formatInputDate(date) {
 
 function formatCurrency(value) {
   if (!isDisplayableNumber(value)) return '-'
-  return '¥' + Math.round(Number(value)).toLocaleString('ja-JP')
+  return '¥' + Number(value).toLocaleString('ja-JP', {
+    minimumFractionDigits: analysisDisplaySettings.money_decimal_digits,
+    maximumFractionDigits: analysisDisplaySettings.money_decimal_digits,
+  })
 }
 
 function formatCurrencyNoDecimal(value) {
   if (!isDisplayableNumber(value)) return '-'
-  return '¥' + Math.round(Number(value)).toLocaleString('ja-JP')
+  return '¥' + Number(value).toLocaleString('ja-JP', {
+    minimumFractionDigits: analysisDisplaySettings.money_decimal_digits,
+    maximumFractionDigits: analysisDisplaySettings.money_decimal_digits,
+  })
 }
 
 function formatInteger(value) {
   if (!isDisplayableNumber(value)) return '-'
-  return Math.round(Number(value)).toLocaleString('ja-JP')
+  return Number(value).toLocaleString('ja-JP', {
+    minimumFractionDigits: analysisDisplaySettings.count_decimal_digits,
+    maximumFractionDigits: analysisDisplaySettings.count_decimal_digits,
+  })
 }
 
 function formatPercent(value) {
   if (!isDisplayableNumber(value)) return '-'
-  return `${(Number(value) * 100).toFixed(2)}%`
+  return `${(Number(value) * 100).toFixed(analysisDisplaySettings.percent_decimal_digits)}%`
 }
 
 function formatSlashDate(value) {
