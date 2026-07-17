@@ -20,8 +20,16 @@ type SettingRow = {
   updated_at: string | null
 }
 
+type ExchangeRateRow = {
+  id: number
+  target_month: string
+  currency: string
+  rate: number
+  updated_at: string | null
+}
+
 async function fetchSystemInfo(db: D1Database) {
-  const latestMigration = '0010_create_app_settings'
+  const latestMigration = '0012_ad_media_import_foundation'
   const [media, sites, campaigns, uploads] = await Promise.all([
     db.prepare('SELECT COUNT(*) AS count FROM media_master').first<{ count: number }>(),
     db.prepare('SELECT COUNT(*) AS count FROM site_master').first<{ count: number }>(),
@@ -55,6 +63,19 @@ async function fetchSettingRows(db: D1Database) {
   }
 }
 
+async function fetchExchangeRates(db: D1Database) {
+  try {
+    const { results } = await db.prepare(
+      `SELECT id, target_month, currency, rate, updated_at
+       FROM exchange_rates
+       ORDER BY target_month DESC, currency ASC`
+    ).all<ExchangeRateRow>()
+    return results
+  } catch (err) {
+    return []
+  }
+}
+
 function buildDefinitionList() {
   return SETTING_DEFINITIONS.map((definition) => ({
     group: definition.group,
@@ -74,6 +95,7 @@ settingsRoute.get('/', async (c) => {
     fetchSettingRows(c.env.DB),
     fetchSystemInfo(c.env.DB),
   ])
+  const exchangeRates = await fetchExchangeRates(c.env.DB)
 
   return c.json<ApiResponse<Record<string, unknown>>>({
     success: true,
@@ -82,6 +104,7 @@ settingsRoute.get('/', async (c) => {
       defaults: getDefaultSettings(),
       definitions: buildDefinitionList(),
       stored_rows: rows,
+      exchange_rates: exchangeRates,
       system,
       import_policies: {
         ad_media_csv: '対象期間＋媒体単位で既存明細を置き換え',
@@ -89,6 +112,73 @@ settingsRoute.get('/', async (c) => {
         payment_report_csv: '登録日＋媒体＋広告コード＋顧客ID単位で重複を防止し、登録日基準で集計',
       },
     },
+  })
+})
+
+settingsRoute.get('/exchange-rates', async (c) => {
+  return c.json<ApiResponse<ExchangeRateRow[]>>({
+    success: true,
+    data: await fetchExchangeRates(c.env.DB),
+  })
+})
+
+settingsRoute.post('/exchange-rates', async (c) => {
+  try {
+    const body = await c.req.json<{
+      target_month: string
+      currency: string
+      rate: number
+    }>()
+    const targetMonth = String(body.target_month ?? '').trim()
+    const currency = String(body.currency ?? '').trim().toUpperCase()
+    const rate = Number(body.rate)
+
+    if (!/^\d{4}-\d{2}$/.test(targetMonth)) {
+      throw new Error('対象月は YYYY-MM 形式で指定してください')
+    }
+    if (currency !== 'USD') {
+      throw new Error('現在登録できる通貨は USD です')
+    }
+    if (!Number.isFinite(rate) || rate <= 0) {
+      throw new Error('レートは0より大きい数値で指定してください')
+    }
+
+    await c.env.DB.prepare(
+      `INSERT INTO exchange_rates
+         (target_month, currency, rate, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(target_month, currency) DO UPDATE SET
+         rate = excluded.rate,
+         updated_at = CURRENT_TIMESTAMP`
+    )
+      .bind(targetMonth, currency, rate)
+      .run()
+
+    return c.json<ApiResponse<ExchangeRateRow[]>>({
+      success: true,
+      data: await fetchExchangeRates(c.env.DB),
+    })
+  } catch (err) {
+    return c.json<ApiResponse<null>>(
+      { success: false, error: err instanceof Error ? err.message : '為替レートの保存に失敗しました' },
+      400
+    )
+  }
+})
+
+settingsRoute.delete('/exchange-rates/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json<ApiResponse<null>>(
+      { success: false, error: '削除対象の為替レートIDが正しくありません' },
+      400
+    )
+  }
+
+  await c.env.DB.prepare('DELETE FROM exchange_rates WHERE id = ?').bind(id).run()
+  return c.json<ApiResponse<ExchangeRateRow[]>>({
+    success: true,
+    data: await fetchExchangeRates(c.env.DB),
   })
 })
 

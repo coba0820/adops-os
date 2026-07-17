@@ -102,6 +102,7 @@ function renderMediaTable(list) {
       <tr class="${status === 'paused' ? 'media-row-paused' : ''}">
         <td>${m.id}</td>
         <td>${escapeHtml(m.media_name)}</td>
+        <td>${escapeHtml(m.currency || 'JPY')}</td>
         <td>${renderMediaStatusBadge(status)}</td>
         <td>
           <div class="action-btn-group">
@@ -148,6 +149,7 @@ function bindMediaRowEvents(root, list) {
 function openMediaModal(root, item) {
   const isEdit = !!item
   const currentStatus = normalizeMediaStatus(item?.status)
+  const currentCurrency = item?.currency || 'JPY'
   showModal({
     title: isEdit ? '媒体を編集' : '媒体を追加',
     bodyHtml: `
@@ -162,17 +164,25 @@ function openMediaModal(root, item) {
           <option value="paused" ${currentStatus === 'paused' ? 'selected' : ''}>paused</option>
         </select>
       </div>
+      <div class="form-row">
+        <label class="form-label">通貨</label>
+        <select id="modal-media-currency" class="form-select">
+          <option value="JPY" ${currentCurrency === 'JPY' ? 'selected' : ''}>JPY</option>
+          <option value="USD" ${currentCurrency === 'USD' ? 'selected' : ''}>USD</option>
+        </select>
+      </div>
     `,
     onConfirm: async () => {
       const name = document.getElementById('modal-media-name').value.trim()
       const status = document.getElementById('modal-media-status').value
+      const currency = document.getElementById('modal-media-currency').value
       if (!name) {
         showToast('媒体名を入力してください', 'error')
         return
       }
       const res = isEdit
-        ? await axios.put(`/api/media/${item.id}`, { media_name: name, status }).then((r) => r.data).catch((e) => e.response.data)
-        : await axios.post('/api/media', { media_name: name, status }).then((r) => r.data).catch((e) => e.response.data)
+        ? await axios.put(`/api/media/${item.id}`, { media_name: name, status, currency }).then((r) => r.data).catch((e) => e.response.data)
+        : await axios.post('/api/media', { media_name: name, status, currency }).then((r) => r.data).catch((e) => e.response.data)
 
       if (res.success) {
         closeModal()

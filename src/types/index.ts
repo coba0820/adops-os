@@ -20,6 +20,7 @@ export type MediaStatus = 'active' | 'paused' | 'archived'
 export interface MediaMaster {
   id: number
   media_name: string
+  currency: 'JPY' | 'USD'
   status: MediaStatus
   created_at: string
   updated_at: string

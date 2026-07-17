@@ -73,6 +73,7 @@ export async function renderSettingsPage(container) {
     container.innerHTML = `
       <div class="settings-stack">
         ${FIELD_GROUPS.map((section) => renderSettingsSection(section, data.settings)).join('')}
+        ${renderExchangeRates(data.exchange_rates)}
         ${renderImportPolicy(data.import_policies)}
         ${renderSystemInfo(data.system)}
         <div class="settings-actions">
@@ -86,6 +87,64 @@ export async function renderSettingsPage(container) {
     console.error(err)
     container.innerHTML = `<div class="card"><div class="empty-state">設定データの取得に失敗しました</div></div>`
   }
+}
+
+function renderExchangeRates(rates = []) {
+  const rows = rates.length === 0
+    ? `<tr><td colspan="4">為替レートはまだ登録されていません</td></tr>`
+    : rates.map((rate) => `
+      <tr>
+        <td>${escapeHtml(rate.target_month)}</td>
+        <td>${escapeHtml(rate.currency)}</td>
+        <td>${Number(rate.rate).toLocaleString('ja-JP', { maximumFractionDigits: 4 })}</td>
+        <td>
+          <button class="icon-btn danger" data-action="delete-exchange-rate" data-id="${rate.id}" title="削除">
+            <i class="fa-solid fa-trash"></i>
+          </button>
+        </td>
+      </tr>
+    `).join('')
+
+  const defaultMonth = new Date().toISOString().slice(0, 7)
+
+  return `
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title"><i class="fa-solid fa-yen-sign"></i>為替レート管理</div>
+          <div class="card-subtitle">USD媒体の広告費を保存時に円換算する月別固定レートです。</div>
+        </div>
+      </div>
+      <div class="settings-grid">
+        <label class="settings-field">
+          <span>対象月</span>
+          <input id="exchange-target-month" type="month" class="form-input" value="${defaultMonth}" />
+        </label>
+        <label class="settings-field">
+          <span>通貨</span>
+          <select id="exchange-currency" class="form-select">
+            <option value="USD">USD</option>
+          </select>
+        </label>
+        <label class="settings-field">
+          <span>レート</span>
+          <input id="exchange-rate" type="number" step="0.0001" min="0" class="form-input" placeholder="147.23" />
+        </label>
+        <label class="settings-field">
+          <span>&nbsp;</span>
+          <button class="btn btn-secondary" id="exchange-save" type="button"><i class="fa-solid fa-floppy-disk"></i>保存</button>
+        </label>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr><th>対象月</th><th>通貨</th><th>レート</th><th style="width:80px">操作</th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+  `
 }
 
 function renderSettingsSection(section, settings) {
@@ -200,6 +259,38 @@ function renderSystemInfo(system) {
 }
 
 function bindSettingsEvents(container) {
+  container.querySelector('#exchange-save')?.addEventListener('click', async () => {
+    try {
+      const targetMonth = container.querySelector('#exchange-target-month')?.value
+      const currency = container.querySelector('#exchange-currency')?.value
+      const rate = Number(container.querySelector('#exchange-rate')?.value)
+      await axios.post('/api/settings/exchange-rates', {
+        target_month: targetMonth,
+        currency,
+        rate,
+      })
+      showToast('為替レートを保存しました', 'success')
+      renderSettingsPage(container)
+    } catch (err) {
+      console.error(err)
+      showToast(err.response?.data?.error || '為替レートの保存に失敗しました', 'error')
+    }
+  })
+
+  container.querySelectorAll('[data-action="delete-exchange-rate"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!window.confirm('この為替レートを削除しますか？')) return
+      try {
+        await axios.delete(`/api/settings/exchange-rates/${btn.dataset.id}`)
+        showToast('為替レートを削除しました', 'success')
+        renderSettingsPage(container)
+      } catch (err) {
+        console.error(err)
+        showToast(err.response?.data?.error || '為替レートの削除に失敗しました', 'error')
+      }
+    })
+  })
+
   container.querySelector('#settings-save')?.addEventListener('click', async () => {
     try {
       const payload = collectSettings(container)

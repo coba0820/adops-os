@@ -9,6 +9,7 @@ import type {
   UploadStatusItem,
 } from '../../types'
 import { fetchAppSettings } from '../../lib/settings'
+import { parseAdMediaRows } from '../../lib/ad-media-parsers'
 
 export const uploadRoute = new Hono<{ Bindings: Bindings }>()
 
@@ -57,6 +58,7 @@ type AdMediaDailyRow = {
   impressions: number
   spend: number
   mediaCv: number
+  currency: string
   uploadHistoryId: number
 }
 
@@ -587,6 +589,22 @@ async function deleteOldMediaSummaryRowsInRange(
   }
 }
 
+async function fetchExchangeRates(db: D1Database) {
+  try {
+    const { results } = await db.prepare(
+      `SELECT target_month, currency, rate
+       FROM exchange_rates`
+    ).all<{ target_month: string; currency: string; rate: number }>()
+
+    return results.reduce<Record<string, number>>((rates, row) => {
+      rates[`${row.target_month}:${String(row.currency).toUpperCase()}`] = Number(row.rate)
+      return rates
+    }, {})
+  } catch (err) {
+    return {}
+  }
+}
+
 async function deleteOldPaymentReportRowsInRange(
   db: D1Database,
   rows: PaymentReportDailyRow[],
@@ -631,11 +649,31 @@ async function deleteOldPaymentReportRowsInRange(
   }
 }
 
-function buildAdMediaDailyRows(rows: CsvRows, mediaId: number, uploadHistoryId: number) {
+function buildAdMediaDailyRows(
+  rows: CsvRows,
+  mediaId: number,
+  mediaName: string,
+  exchangeRates: Record<string, number>,
+  uploadHistoryId: number
+) {
   const [headerRow, ...bodyRows] = rows
   if (!headerRow || headerRow.length === 0) {
     throw new Error('CSVヘッダー行が見つかりません')
   }
+
+  logUploadInfo('buildAdMediaDailyRows called', {
+    csvRows: rows.length,
+    bodyRows: countBodyRows(rows),
+    headers: headerRow,
+    normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
+    mediaName,
+  })
+
+  return parseAdMediaRows(rows, { mediaName, exchangeRates }).map((row): AdMediaDailyRow => ({
+    ...row,
+    mediaId,
+    uploadHistoryId,
+  }))
 
   const headerIndex = buildHeaderIndex(headerRow)
   ensureHeaders(headerIndex, [
@@ -657,7 +695,14 @@ function buildAdMediaDailyRows(rows: CsvRows, mediaId: number, uploadHistoryId: 
     headers: headerRow,
     normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
     mediaCvHeader,
+    mediaName,
   })
+
+  return parseAdMediaRows(rows, { mediaName, exchangeRates }).map((row): AdMediaDailyRow => ({
+    ...row,
+    mediaId,
+    uploadHistoryId,
+  }))
 
   return bodyRows.filter((row) => !isBlankRow(row)).map((row, index): AdMediaDailyRow => {
     const targetDate = parseTargetDate(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.date.aliases))
@@ -1096,6 +1141,7 @@ uploadRoute.post('/', async (c) => {
   }
 
   let mediaId: number | null = null
+  let mediaName = ''
 
   if (fileType === 'ad_media_csv') {
     const requestedMediaId = Number(body.media_id)
@@ -1107,10 +1153,10 @@ uploadRoute.post('/', async (c) => {
     }
 
     const media = await c.env.DB.prepare(
-      `SELECT id FROM media_master WHERE id = ? AND status = 'active'`
+      `SELECT id, media_name FROM media_master WHERE id = ? AND status = 'active'`
     )
       .bind(requestedMediaId)
-      .first<{ id: number }>()
+      .first<{ id: number; media_name: string }>()
 
     if (!media) {
       return c.json<ApiResponse<null>>(
@@ -1120,6 +1166,7 @@ uploadRoute.post('/', async (c) => {
     }
 
     mediaId = requestedMediaId
+    mediaName = media.media_name
   }
 
   const csvRows =
@@ -1181,6 +1228,9 @@ uploadRoute.post('/', async (c) => {
   let adMediaDateRange: TargetDateRange | null = null
   let mediaSummaryDateRange: TargetDateRange | null = null
   let paymentReportDateRange: TargetDateRange | null = null
+  const exchangeRates = fileType === 'ad_media_csv'
+    ? await fetchExchangeRates(c.env.DB)
+    : {}
 
   try {
     if (fileType === 'ad_media_csv') {
@@ -1188,6 +1238,8 @@ uploadRoute.post('/', async (c) => {
         buildAdMediaDailyRows(
           csvRows,
           mediaId,
+          mediaName,
+          exchangeRates,
           0
         )
       )
@@ -1315,8 +1367,8 @@ uploadRoute.post('/', async (c) => {
               `INSERT OR REPLACE INTO ad_media_daily
                  (target_date, media_id, account_name, account_id,
                   campaign_name, campaign_id, clicks, served_ads,
-                  impressions, spend, media_cv, upload_history_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                  impressions, spend, media_cv, currency, upload_history_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             ).bind(
               row.targetDate,
               row.mediaId,
@@ -1329,6 +1381,7 @@ uploadRoute.post('/', async (c) => {
               row.impressions,
               row.spend,
               row.mediaCv,
+              row.currency,
               uploadHistoryId
             )
           )

@@ -9,6 +9,8 @@ export const mediaRoute = new Hono<{ Bindings: Bindings }>()
 
 const SUPPORTED_MEDIA_STATUSES = ['active', 'paused'] as const
 type SupportedMediaStatus = (typeof SUPPORTED_MEDIA_STATUSES)[number]
+const SUPPORTED_CURRENCIES = ['JPY', 'USD'] as const
+type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number]
 
 function hasStatusField(body: { status?: unknown }) {
   return Object.prototype.hasOwnProperty.call(body, 'status')
@@ -20,6 +22,14 @@ function parseMediaStatus(status: unknown): SupportedMediaStatus | null {
     SUPPORTED_MEDIA_STATUSES.includes(status as SupportedMediaStatus)
   ) {
     return status as SupportedMediaStatus
+  }
+  return null
+}
+
+function parseCurrency(currency: unknown): SupportedCurrency | null {
+  const value = String(currency ?? 'JPY').trim().toUpperCase()
+  if (SUPPORTED_CURRENCIES.includes(value as SupportedCurrency)) {
+    return value as SupportedCurrency
   }
   return null
 }
@@ -41,7 +51,7 @@ mediaRoute.get('/', async (c) => {
 // status未指定時は既存API互換のため active として登録する。
 // ------------------------------------------------------------
 mediaRoute.post('/', async (c) => {
-  const body = await c.req.json<{ media_name: string; status?: string }>()
+  const body = await c.req.json<{ media_name: string; status?: string; currency?: string }>()
 
   if (!body.media_name || body.media_name.trim() === '') {
     return c.json<ApiResponse<null>>(
@@ -58,10 +68,18 @@ mediaRoute.post('/', async (c) => {
     )
   }
 
+  const currency = parseCurrency(body.currency)
+  if (!currency) {
+    return c.json<ApiResponse<null>>(
+      { success: false, error: 'currency 縺ｯ JPY 縺ｾ縺溘・ USD 繧呈欠螳壹＠縺ｦ縺上□縺輔＞' },
+      400
+    )
+  }
+
   const result = await c.env.DB.prepare(
-    'INSERT INTO media_master (media_name, status) VALUES (?, ?)'
+    'INSERT INTO media_master (media_name, status, currency) VALUES (?, ?, ?)'
   )
-    .bind(body.media_name.trim(), status)
+    .bind(body.media_name.trim(), status, currency)
     .run()
 
   return c.json<ApiResponse<{ id: number | null }>>({
@@ -77,11 +95,27 @@ mediaRoute.post('/', async (c) => {
 // ------------------------------------------------------------
 mediaRoute.put('/:id', async (c) => {
   const id = c.req.param('id')
-  const body = await c.req.json<{ media_name: string; status?: string }>()
+  const body = await c.req.json<{ media_name: string; status?: string; currency?: string }>()
 
   if (!body.media_name || body.media_name.trim() === '') {
     return c.json<ApiResponse<null>>(
       { success: false, error: '媒体名は必須です' },
+      400
+    )
+  }
+
+  const current = await c.env.DB.prepare(
+    'SELECT currency FROM media_master WHERE id = ?'
+  )
+    .bind(id)
+    .first<{ currency: string | null }>()
+  const currentCurrency = current?.currency || 'JPY'
+  const nextCurrency = Object.prototype.hasOwnProperty.call(body, 'currency')
+    ? parseCurrency(body.currency)
+    : parseCurrency(currentCurrency)
+  if (!nextCurrency) {
+    return c.json<ApiResponse<null>>(
+      { success: false, error: 'currency 縺ｯ JPY 縺ｾ縺溘・ USD 繧呈欠螳壹＠縺ｦ縺上□縺輔＞' },
       400
     )
   }
@@ -96,15 +130,15 @@ mediaRoute.put('/:id', async (c) => {
     }
 
     await c.env.DB.prepare(
-      'UPDATE media_master SET media_name = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+      'UPDATE media_master SET media_name = ?, status = ?, currency = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
     )
-      .bind(body.media_name.trim(), status, id)
+      .bind(body.media_name.trim(), status, nextCurrency, id)
       .run()
   } else {
     await c.env.DB.prepare(
-      'UPDATE media_master SET media_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+      'UPDATE media_master SET media_name = ?, currency = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
     )
-      .bind(body.media_name.trim(), id)
+      .bind(body.media_name.trim(), nextCurrency, id)
       .run()
   }
 
