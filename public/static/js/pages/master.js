@@ -1,30 +1,27 @@
-﻿// ============================================================
-// 繝槭せ繧ｿ邂｡逅・判髱｢
-// 繧ｿ繝門・譖ｿ: 蟐剃ｽ薙・繧ｹ繧ｿ / 繧ｵ繧､繝医・繧ｹ繧ｿ / 繧ｭ繝｣繝ｳ繝壹・繝ｳ繝槭せ繧ｿ
-// 蜷・・繧ｹ繧ｿ縺ｯ荳隕ｧ陦ｨ遉ｺ繝ｻ霑ｽ蜉繝ｻ邱ｨ髮・・蜑企勁・・RUD・峨′蜿ｯ閭ｽ縲・
-// 繧ｭ繝｣繝ｳ繝壹・繝ｳ繝槭せ繧ｿ縺ｯ縲悟ｪ剃ｽ凪・蠎・相繧ｳ繝ｼ繝俄・繧ｵ繧､繝医阪・邏蝉ｻ倥￠繧呈戟縺､
-// 譛驥崎ｦ√・繧ｹ繧ｿ縺ｮ縺溘ａ縲∝ｪ剃ｽ薙・繧ｵ繧､繝医・繝励Ν繝繧ｦ繝ｳ繧貞盾辣ｧ縺吶ｋ縲・
+// ============================================================
+// マスタ管理画面
+// タブ切替: 媒体マスタ / サイトマスタ / 広告コードマスタ / キャンペーングループ管理
 // ============================================================
 import { showModal, closeModal, confirmDelete } from '../components/modal.js'
 import { showToast } from '../components/toast.js'
 
 const SUB_TABS = [
-  { key: 'media', label: '蟐剃ｽ薙・繧ｹ繧ｿ' },
-  { key: 'site', label: '繧ｵ繧､繝医・繧ｹ繧ｿ' },
-  { key: 'campaign', label: '繧ｭ繝｣繝ｳ繝壹・繝ｳ繝槭せ繧ｿ' },
+  { key: 'media', label: '媒体マスタ' },
+  { key: 'site', label: 'サイトマスタ' },
+  { key: 'campaign', label: '広告コードマスタ' },
   { key: 'campaignGroup', label: 'キャンペーングループ管理' },
 ]
 
 const MEDIA_STATUS_VIEW = {
-  active: { label: '泙 遞ｼ蜒堺ｸｭ', badgeClass: 'badge-active' },
-  paused: { label: '泯 蛛懈ｭ｢', badgeClass: 'badge-paused' },
+  active: { label: '稼働中', badgeClass: 'badge-active' },
+  paused: { label: '停止中', badgeClass: 'badge-paused' },
   archived: { label: 'アーカイブ', badgeClass: 'badge-inactive' },
 }
 
 let activeSubTab = 'media'
 
 /**
- * 繝槭せ繧ｿ邂｡逅・判髱｢繧呈緒逕ｻ縺吶ｋ・医お繝ｳ繝医Μ繝ｼ繝昴う繝ｳ繝茨ｼ・
+ * マスタ管理画面を描画する
  * @param {HTMLElement} container #main-content 隕∫ｴ
  */
 export function renderMasterPage(container) {
@@ -32,7 +29,7 @@ export function renderMasterPage(container) {
 }
 
 /**
- * 繧ｿ繝悶ヰ繝ｼ・九さ繝ｳ繝・Φ繝・棧繧呈緒逕ｻ縺励∫樟蝨ｨ縺ｮ繧ｿ繝悶・蜀・ｮｹ繧定ｪｭ縺ｿ霎ｼ繧
+ * タブバーとコンテンツ枠を描画し、現在のタブ内容を読み込む
  */
 function drawShell(container) {
   const tabBarHtml = SUB_TABS.map(
@@ -66,16 +63,16 @@ function drawShell(container) {
 }
 
 // ============================================================
-// 蟐剃ｽ薙・繧ｹ繧ｿ
+// 媒体マスタ
 // ============================================================
 async function renderMediaMaster(root) {
-  root.innerHTML = `<div class="empty-state">隱ｭ縺ｿ霎ｼ縺ｿ荳ｭ...</div>`
+  root.innerHTML = `<div class="empty-state">読み込み中...</div>`
   const list = await fetchList('/api/media')
 
   root.innerHTML = `
     <div class="section-toolbar">
-      <p class="section-desc mt-0" style="margin-bottom:0">蠎・相繧帝・菫｡縺吶ｋ蟐剃ｽ薙ｒ邂｡逅・＠縺ｾ縺吶・/p>
-      <button class="btn btn-primary" id="media-add-btn"><i class="fa-solid fa-plus"></i>蟐剃ｽ薙ｒ霑ｽ蜉</button>
+      <p class="section-desc mt-0" style="margin-bottom:0">広告を配信する媒体を管理します。</p>
+      <button class="btn btn-primary" id="media-add-btn"><i class="fa-solid fa-plus"></i>媒体を追加</button>
     </div>
     ${renderMediaTable(list)}
   `
@@ -95,7 +92,7 @@ function renderMediaStatusBadge(status) {
 
 function renderMediaTable(list) {
   if (list.length === 0) {
-    return `<div class="empty-state">蟐剃ｽ薙′逋ｻ骭ｲ縺輔ｌ縺ｦ縺・∪縺帙ｓ</div>`
+    return `<div class="empty-state">媒体が登録されていません</div>`
   }
   const rows = list
     .map(
@@ -109,8 +106,8 @@ function renderMediaTable(list) {
         <td>${renderMediaStatusBadge(status)}</td>
         <td>
           <div class="action-btn-group">
-            <button class="icon-btn" data-action="edit" data-id="${m.id}" title="邱ｨ髮・><i class="fa-solid fa-pen"></i></button>
-            <button class="icon-btn danger" data-action="delete" data-id="${m.id}" title="蜑企勁"><i class="fa-solid fa-trash"></i></button>
+            <button class="icon-btn" data-action="edit" data-id="${m.id}" title="編集"><i class="fa-solid fa-pen"></i></button>
+            <button class="icon-btn danger" data-action="delete" data-id="${m.id}" title="削除"><i class="fa-solid fa-trash"></i></button>
           </div>
         </td>
       </tr>
@@ -121,7 +118,7 @@ function renderMediaTable(list) {
   return `
     <div class="table-scroll">
       <table class="data-table">
-        <thead><tr><th>蟐剃ｽ的D</th><th>蟐剃ｽ灘錐</th><th>迥ｶ諷・/th><th style="width:100px">謫堺ｽ・/th></tr></thead>
+        <thead><tr><th>媒体ID</th><th>媒体名</th><th>通貨</th><th>状態</th><th style="width:100px">操作</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -140,10 +137,10 @@ function bindMediaRowEvents(root, list) {
       if (!confirmDelete('この媒体を削除しますか？')) return
       const res = await deleteItem('/api/media', btn.dataset.id)
       if (res.success) {
-        showToast('蜑企勁縺励∪縺励◆', 'success')
+        showToast('削除しました', 'success')
         renderMediaMaster(root)
       } else {
-        showToast(res.error || '蜑企勁縺ｫ螟ｱ謨励＠縺ｾ縺励◆', 'error')
+        showToast(res.error || '削除に失敗しました', 'error')
       }
     })
   })
@@ -157,11 +154,11 @@ function openMediaModal(root, item) {
     title: isEdit ? '媒体を編集' : '媒体を追加',
     bodyHtml: `
       <div class="form-row">
-        <label class="form-label">蟐剃ｽ灘錐</label>
-        <input type="text" id="modal-media-name" class="form-input" value="${isEdit ? escapeHtml(item.media_name) : ''}" placeholder="萓・ Google蠎・相" />
+        <label class="form-label">媒体名</label>
+        <input type="text" id="modal-media-name" class="form-input" value="${isEdit ? escapeHtml(item.media_name) : ''}" placeholder="例 Google広告" />
       </div>
       <div class="form-row">
-        <label class="form-label">迥ｶ諷・/label>
+        <label class="form-label">状態</label>
         <select id="modal-media-status" class="form-select">
           <option value="active" ${currentStatus === 'active' ? 'selected' : ''}>active</option>
           <option value="paused" ${currentStatus === 'paused' ? 'selected' : ''}>paused</option>
@@ -180,7 +177,7 @@ function openMediaModal(root, item) {
       const status = document.getElementById('modal-media-status').value
       const currency = document.getElementById('modal-media-currency').value
       if (!name) {
-        showToast('蟐剃ｽ灘錐繧貞・蜉帙＠縺ｦ縺上□縺輔＞', 'error')
+        showToast('媒体名を入力してください', 'error')
         return
       }
       const res = isEdit
@@ -189,26 +186,26 @@ function openMediaModal(root, item) {
 
       if (res.success) {
         closeModal()
-        showToast(isEdit ? '譖ｴ譁ｰ縺励∪縺励◆' : '霑ｽ蜉縺励∪縺励◆', 'success')
+        showToast(isEdit ? '更新しました' : '追加しました', 'success')
         renderMediaMaster(root)
       } else {
-        showToast(res.error || '菫晏ｭ倥↓螟ｱ謨励＠縺ｾ縺励◆', 'error')
+        showToast(res.error || '保存に失敗しました', 'error')
       }
     },
   })
 }
 
 // ============================================================
-// 繧ｵ繧､繝医・繧ｹ繧ｿ
+// サイトマスタ
 // ============================================================
 async function renderSiteMaster(root) {
-  root.innerHTML = `<div class="empty-state">隱ｭ縺ｿ霎ｼ縺ｿ荳ｭ...</div>`
+  root.innerHTML = `<div class="empty-state">読み込み中...</div>`
   const list = await fetchList('/api/site')
 
   root.innerHTML = `
     <div class="section-toolbar">
-      <p class="section-desc mt-0" style="margin-bottom:0">蠎・相縺ｮ蜿励￠逧ｿ縺ｨ縺ｪ繧玖・遉ｾ繧ｵ繧､繝医・LP繧堤ｮ｡逅・＠縺ｾ縺吶・/p>
-      <button class="btn btn-primary" id="site-add-btn"><i class="fa-solid fa-plus"></i>繧ｵ繧､繝医ｒ霑ｽ蜉</button>
+      <p class="section-desc mt-0" style="margin-bottom:0">広告の受け皿となる自社サイト・LPを管理します。</p>
+      <button class="btn btn-primary" id="site-add-btn"><i class="fa-solid fa-plus"></i>サイトを追加</button>
     </div>
     ${renderSiteTable(list)}
   `
@@ -219,7 +216,7 @@ async function renderSiteMaster(root) {
 
 function renderSiteTable(list) {
   if (list.length === 0) {
-    return `<div class="empty-state">繧ｵ繧､繝医′逋ｻ骭ｲ縺輔ｌ縺ｦ縺・∪縺帙ｓ</div>`
+    return `<div class="empty-state">サイトが登録されていません</div>`
   }
   const rows = list
     .map(
@@ -229,8 +226,8 @@ function renderSiteTable(list) {
         <td>${escapeHtml(s.site_name)}</td>
         <td>
           <div class="action-btn-group">
-            <button class="icon-btn" data-action="edit" data-id="${s.id}" title="邱ｨ髮・><i class="fa-solid fa-pen"></i></button>
-            <button class="icon-btn danger" data-action="delete" data-id="${s.id}" title="蜑企勁"><i class="fa-solid fa-trash"></i></button>
+            <button class="icon-btn" data-action="edit" data-id="${s.id}" title="編集"><i class="fa-solid fa-pen"></i></button>
+            <button class="icon-btn danger" data-action="delete" data-id="${s.id}" title="削除"><i class="fa-solid fa-trash"></i></button>
           </div>
         </td>
       </tr>
@@ -241,7 +238,7 @@ function renderSiteTable(list) {
   return `
     <div class="table-scroll">
       <table class="data-table">
-        <thead><tr><th>繧ｵ繧､繝・D</th><th>繧ｵ繧､繝亥錐</th><th style="width:100px">謫堺ｽ・/th></tr></thead>
+        <thead><tr><th>サイトID</th><th>サイト名</th><th style="width:100px">操作</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -260,10 +257,10 @@ function bindSiteRowEvents(root, list) {
       if (!confirmDelete('このサイトを削除しますか？')) return
       const res = await deleteItem('/api/site', btn.dataset.id)
       if (res.success) {
-        showToast('蜑企勁縺励∪縺励◆', 'success')
+        showToast('削除しました', 'success')
         renderSiteMaster(root)
       } else {
-        showToast(res.error || '蜑企勁縺ｫ螟ｱ謨励＠縺ｾ縺励◆', 'error')
+        showToast(res.error || '削除に失敗しました', 'error')
       }
     })
   })
@@ -275,14 +272,14 @@ function openSiteModal(root, item) {
     title: isEdit ? 'サイトを編集' : 'サイトを追加',
     bodyHtml: `
       <div class="form-row">
-        <label class="form-label">繧ｵ繧､繝亥錐</label>
-        <input type="text" id="modal-site-name" class="form-input" value="${isEdit ? escapeHtml(item.site_name) : ''}" placeholder="萓・ SVC蜈ｬ蠑上し繧､繝・ />
+        <label class="form-label">サイト名</label>
+        <input type="text" id="modal-site-name" class="form-input" value="${isEdit ? escapeHtml(item.site_name) : ''}" placeholder="例 SVC公式サイト" />
       </div>
     `,
     onConfirm: async () => {
       const name = document.getElementById('modal-site-name').value.trim()
       if (!name) {
-        showToast('繧ｵ繧､繝亥錐繧貞・蜉帙＠縺ｦ縺上□縺輔＞', 'error')
+        showToast('サイト名を入力してください', 'error')
         return
       }
       const res = isEdit
@@ -291,20 +288,20 @@ function openSiteModal(root, item) {
 
       if (res.success) {
         closeModal()
-        showToast(isEdit ? '譖ｴ譁ｰ縺励∪縺励◆' : '霑ｽ蜉縺励∪縺励◆', 'success')
+        showToast(isEdit ? '更新しました' : '追加しました', 'success')
         renderSiteMaster(root)
       } else {
-        showToast(res.error || '菫晏ｭ倥↓螟ｱ謨励＠縺ｾ縺励◆', 'error')
+        showToast(res.error || '保存に失敗しました', 'error')
       }
     },
   })
 }
 
 // ============================================================
-// 繧ｭ繝｣繝ｳ繝壹・繝ｳ繝槭せ繧ｿ・亥ｪ剃ｽ凪・蠎・相繧ｳ繝ｼ繝俄・繧ｵ繧､繝医・邏蝉ｻ倥￠・・
+// 広告コードマスタ（媒体・広告コード・サイトの紐付け）
 // ============================================================
 async function renderCampaignMaster(root) {
-  root.innerHTML = `<div class="empty-state">隱ｭ縺ｿ霎ｼ縺ｿ荳ｭ...</div>`
+  root.innerHTML = `<div class="empty-state">読み込み中...</div>`
 
   const [campaigns, mediaList, siteList] = await Promise.all([
     fetchList('/api/campaign'),
@@ -314,12 +311,12 @@ async function renderCampaignMaster(root) {
 
   root.innerHTML = `
     <div class="section-toolbar">
-      <p class="section-desc mt-0" style="margin-bottom:0">縲悟ｪ剃ｽ・竊・蠎・相繧ｳ繝ｼ繝・竊・繧ｵ繧､繝医阪ｒ邏蝉ｻ倥￠繧区怙驥崎ｦ√・繧ｹ繧ｿ縺ｧ縺吶・/p>
+      <p class="section-desc mt-0" style="margin-bottom:0">「媒体 → 広告コード → サイト」を紐付ける重要なマスタです。</p>
       <button class="btn btn-primary" id="campaign-add-btn" ${mediaList.length === 0 || siteList.length === 0 ? 'disabled' : ''}>
-        <i class="fa-solid fa-plus"></i>繧ｭ繝｣繝ｳ繝壹・繝ｳ繧定ｿｽ蜉
+        <i class="fa-solid fa-plus"></i>広告コードを追加
       </button>
     </div>
-    ${mediaList.length === 0 || siteList.length === 0 ? '<div class="form-hint" style="margin-bottom:16px">窶ｻ 蜈医↓蟐剃ｽ薙・繧ｹ繧ｿ繝ｻ繧ｵ繧､繝医・繧ｹ繧ｿ繧・莉ｶ莉･荳顔匳骭ｲ縺励※縺上□縺輔＞</div>' : ''}
+    ${mediaList.length === 0 || siteList.length === 0 ? '<div class="form-hint" style="margin-bottom:16px">※ 先に媒体マスタ・サイトマスタを1件以上登録してください</div>' : ''}
     ${renderCampaignTable(campaigns)}
   `
 
@@ -329,7 +326,7 @@ async function renderCampaignMaster(root) {
 
 function renderCampaignTable(list) {
   if (list.length === 0) {
-    return `<div class="empty-state">繧ｭ繝｣繝ｳ繝壹・繝ｳ縺檎匳骭ｲ縺輔ｌ縺ｦ縺・∪縺帙ｓ</div>`
+    return `<div class="empty-state">広告コードが登録されていません</div>`
   }
   const rows = list
     .map(
@@ -340,11 +337,11 @@ function renderCampaignTable(list) {
         <td>${escapeHtml(c.media_name || '-')}</td>
         <td>${escapeHtml(c.ad_code || '-')}</td>
         <td>${escapeHtml(c.site_name || '-')}</td>
-        <td><span class="badge ${c.is_active ? 'badge-active' : 'badge-inactive'}">${c.is_active ? '譛牙柑' : '辟｡蜉ｹ'}</span></td>
+        <td><span class="badge ${c.is_active ? 'badge-active' : 'badge-inactive'}">${c.is_active ? '有効' : '無効'}</span></td>
         <td>
           <div class="action-btn-group">
-            <button class="icon-btn" data-action="edit" data-id="${c.id}" title="邱ｨ髮・><i class="fa-solid fa-pen"></i></button>
-            <button class="icon-btn danger" data-action="delete" data-id="${c.id}" title="蜑企勁"><i class="fa-solid fa-trash"></i></button>
+            <button class="icon-btn" data-action="edit" data-id="${c.id}" title="編集"><i class="fa-solid fa-pen"></i></button>
+            <button class="icon-btn danger" data-action="delete" data-id="${c.id}" title="削除"><i class="fa-solid fa-trash"></i></button>
           </div>
         </td>
       </tr>
@@ -357,7 +354,7 @@ function renderCampaignTable(list) {
       <table class="data-table">
         <thead>
           <tr>
-            <th>ID</th><th>繧ｭ繝｣繝ｳ繝壹・繝ｳ蜷・/th><th>蟐剃ｽ・/th><th>蠎・相繧ｳ繝ｼ繝・/th><th>繧ｵ繧､繝・/th><th>迥ｶ諷・/th><th style="width:100px">謫堺ｽ・/th>
+            <th>ID</th><th>キャンペーン名</th><th>媒体</th><th>広告コード</th><th>サイト</th><th>状態</th><th style="width:100px">操作</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -378,10 +375,10 @@ function bindCampaignRowEvents(root, list, mediaList, siteList) {
       if (!confirmDelete('この広告コードを削除しますか？')) return
       const res = await deleteItem('/api/campaign', btn.dataset.id)
       if (res.success) {
-        showToast('蜑企勁縺励∪縺励◆', 'success')
+        showToast('削除しました', 'success')
         renderCampaignMaster(root)
       } else {
-        showToast(res.error || '蜑企勁縺ｫ螟ｱ謨励＠縺ｾ縺励◆', 'error')
+        showToast(res.error || '削除に失敗しました', 'error')
       }
     })
   })
@@ -401,31 +398,31 @@ function openCampaignModal(root, item, mediaList, siteList) {
     title: isEdit ? '広告コードを編集' : '広告コードを追加',
     bodyHtml: `
       <div class="form-row">
-        <label class="form-label">繧ｭ繝｣繝ｳ繝壹・繝ｳ蜷・/label>
-        <input type="text" id="modal-campaign-name" class="form-input" value="${isEdit ? escapeHtml(item.campaign_name) : ''}" placeholder="萓・ 譁ｰ隕冗佐蠕誉讀懃ｴ｢蠎・相" />
+        <label class="form-label">キャンペーン名</label>
+        <input type="text" id="modal-campaign-name" class="form-input" value="${isEdit ? escapeHtml(item.campaign_name) : ''}" placeholder="例 新規獲得検索広告" />
       </div>
       <div class="form-row">
-        <label class="form-label">蟐剃ｽ・/label>
+        <label class="form-label">媒体</label>
         <select id="modal-campaign-media" class="form-select">
-          <option value="">-- 驕ｸ謚槭＠縺ｦ縺上□縺輔＞ --</option>
+          <option value="">-- 選択してください --</option>
           ${mediaOptions}
         </select>
       </div>
       <div class="form-row">
-        <label class="form-label">蠎・相繧ｳ繝ｼ繝・/label>
+        <label class="form-label">広告コード</label>
         <input type="text" id="modal-campaign-adcode" class="form-input" value="${isEdit ? escapeHtml(item.ad_code || '') : ''}" placeholder="萓・ GAD-001" />
       </div>
       <div class="form-row">
-        <label class="form-label">繧ｵ繧､繝・/label>
+        <label class="form-label">サイト</label>
         <select id="modal-campaign-site" class="form-select">
-          <option value="">-- 驕ｸ謚槭＠縺ｦ縺上□縺輔＞ --</option>
+          <option value="">-- 選択してください --</option>
           ${siteOptions}
         </select>
       </div>
       <div class="form-row inline">
-        <label class="form-label">迥ｶ諷・/label>
+        <label class="form-label">状態</label>
         <select id="modal-campaign-active" class="form-select" style="width:auto">
-          <option value="1" ${!isEdit || item.is_active ? 'selected' : ''}>譛牙柑</option>
+          <option value="1" ${!isEdit || item.is_active ? 'selected' : ''}>有効</option>
           <option value="0" ${isEdit && !item.is_active ? 'selected' : ''}>辟｡蜉ｹ</option>
         </select>
       </div>
@@ -456,10 +453,10 @@ function openCampaignModal(root, item, mediaList, siteList) {
 
       if (res.success) {
         closeModal()
-        showToast(isEdit ? '譖ｴ譁ｰ縺励∪縺励◆' : '霑ｽ蜉縺励∪縺励◆', 'success')
+        showToast(isEdit ? '更新しました' : '追加しました', 'success')
         renderCampaignMaster(root)
       } else {
-        showToast(res.error || '菫晏ｭ倥↓螟ｱ謨励＠縺ｾ縺励◆', 'error')
+        showToast(res.error || '保存に失敗しました', 'error')
       }
     },
   })
@@ -723,25 +720,25 @@ function bindCampaignGroupDetailEvents(root, group, availableAdCodes) {
 // 蜈ｱ騾壹Θ繝ｼ繝・ぅ繝ｪ繝・ぅ
 // ============================================================
 
-/** GET荳隕ｧ蜿門ｾ励・蜈ｱ騾壹Λ繝・ヱ繝ｼ */
+/** GET一覧取得の共通ラッパー */
 async function fetchList(url) {
   try {
     const res = await axios.get(url)
     return res.data.data || []
   } catch (err) {
     console.error(err)
-    showToast('繝・・繧ｿ縺ｮ蜿門ｾ励↓螟ｱ謨励＠縺ｾ縺励◆', 'error')
+    showToast('データの取得に失敗しました', 'error')
     return []
   }
 }
 
-/** DELETE縺ｮ蜈ｱ騾壹Λ繝・ヱ繝ｼ */
+/** DELETEの共通ラッパー */
 async function deleteItem(baseUrl, id) {
   try {
     const res = await axios.delete(`${baseUrl}/${id}`)
     return res.data
   } catch (err) {
-    return err.response?.data || { success: false, error: '蜑企勁縺ｫ螟ｱ謨励＠縺ｾ縺励◆' }
+    return err.response?.data || { success: false, error: '削除に失敗しました' }
   }
 }
 

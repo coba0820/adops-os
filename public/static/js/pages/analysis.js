@@ -1,22 +1,22 @@
-﻿const SUMMARY_CARDS = [
-  { key: 'cost', label: '蠎・相雋ｻ', icon: 'fa-yen-sign', format: formatCurrency },
+const SUMMARY_CARDS = [
+  { key: 'cost', label: '広告費', icon: 'fa-yen-sign', format: formatCurrency },
   { key: 'impressions', label: 'Imp', icon: 'fa-eye', format: formatInteger },
   { key: 'clicks', label: 'Click', icon: 'fa-arrow-pointer', format: formatInteger },
   { key: 'ctr', label: 'CTR', icon: 'fa-percent', format: formatPercent },
-  { key: 'cpc', label: '蟷ｳ蝮④PC', icon: 'fa-hand-pointer', format: formatCurrencyNoDecimal },
-  { key: 'cpm', label: '蟷ｳ蝮④PM', icon: 'fa-gauge-high', format: formatCurrencyNoDecimal },
-  { key: 'media_cv', label: '蟐剃ｽ鼎V', icon: 'fa-bullseye', format: formatInteger },
-  { key: 'media_cpa', label: '蟐剃ｽ鼎PA', icon: 'fa-coins', format: formatCurrencyNoDecimal },
-  { key: 'media_cvr', label: '蟐剃ｽ鼎VR', icon: 'fa-chart-simple', format: formatPercent },
-  { key: 'access_count', label: '繧｢繧ｯ繧ｻ繧ｹ', icon: 'fa-users-viewfinder', format: formatInteger },
-  { key: 'registration_count', label: '逋ｻ骭ｲ', icon: 'fa-user-check', format: formatInteger },
-  { key: 'provisional_registration_count', label: '莉ｮ逋ｻ骭ｲ', icon: 'fa-user-clock', format: formatInteger },
+  { key: 'cpc', label: '平均CPC', icon: 'fa-hand-pointer', format: formatCurrencyNoDecimal },
+  { key: 'cpm', label: '平均CPM', icon: 'fa-gauge-high', format: formatCurrencyNoDecimal },
+  { key: 'media_cv', label: '媒体CV', icon: 'fa-bullseye', format: formatInteger },
+  { key: 'media_cpa', label: '媒体CPA', icon: 'fa-coins', format: formatCurrencyNoDecimal },
+  { key: 'media_cvr', label: '媒体CVR', icon: 'fa-chart-simple', format: formatPercent },
+  { key: 'access_count', label: 'アクセス', icon: 'fa-users-viewfinder', format: formatInteger },
+  { key: 'registration_count', label: '登録', icon: 'fa-user-check', format: formatInteger },
+  { key: 'provisional_registration_count', label: '仮登録', icon: 'fa-user-clock', format: formatInteger },
   { key: 'cpf', label: 'CPF', icon: 'fa-calculator', format: formatCurrencyNoDecimal },
   { key: 'cpa', label: 'CPA', icon: 'fa-receipt', format: formatCurrencyNoDecimal },
   { key: 'cvr', label: 'CVR', icon: 'fa-percent', format: formatPercent },
-  { key: 'payer_count', label: '蜈･驥題・焚', icon: 'fa-user-plus', format: formatInteger },
+  { key: 'payer_count', label: '入金者数', icon: 'fa-user-plus', format: formatInteger },
   { key: 'revenue', label: '売上', icon: 'fa-sack-dollar', format: formatCurrency },
-  { key: 'payment_rate', label: '蜈･驥醍紫', icon: 'fa-circle-dollar-to-slot', format: formatPercent },
+  { key: 'payment_rate', label: '入金率', icon: 'fa-circle-dollar-to-slot', format: formatPercent },
   { key: 'recovery_rate', label: '回収率', icon: 'fa-chart-pie', format: formatPercent },
 ]
 
@@ -27,25 +27,25 @@ const METRIC_COLUMNS = [
   { key: 'ctr', label: 'CTR', format: formatPercent },
   { key: 'cpc', label: 'CPC', format: formatCurrencyNoDecimal },
   { key: 'cpm', label: 'CPM', format: formatCurrencyNoDecimal },
-  { key: 'media_cv', label: '蟐剃ｽ鼎V', format: formatInteger },
-  { key: 'media_cpa', label: '蟐剃ｽ鼎PA', format: formatCurrencyNoDecimal },
-  { key: 'media_cvr', label: '蟐剃ｽ鼎VR', format: formatPercent },
-  { key: 'access_count', label: '繧｢繧ｯ繧ｻ繧ｹ', format: formatInteger },
-  { key: 'registration_count', label: '逋ｻ骭ｲ', format: formatInteger },
-  { key: 'provisional_registration_count', label: '莉ｮ逋ｻ骭ｲ', format: formatInteger },
+  { key: 'media_cv', label: '媒体CV', format: formatInteger },
+  { key: 'media_cpa', label: '媒体CPA', format: formatCurrencyNoDecimal },
+  { key: 'media_cvr', label: '媒体CVR', format: formatPercent },
+  { key: 'access_count', label: 'アクセス', format: formatInteger },
+  { key: 'registration_count', label: '登録', format: formatInteger },
+  { key: 'provisional_registration_count', label: '仮登録', format: formatInteger },
   { key: 'cpf', label: 'CPF', format: formatCurrencyNoDecimal },
   { key: 'cpa', label: 'CPA', format: formatCurrencyNoDecimal },
   { key: 'cvr', label: 'CVR', format: formatPercent },
-  { key: 'payer_count', label: '蜈･驥題・焚', format: formatInteger },
+  { key: 'payer_count', label: '入金者数', format: formatInteger },
   { key: 'revenue', label: '売上', format: formatCurrency },
-  { key: 'payment_rate', label: '蜈･驥醍紫', format: formatPercent, totalOnly: true },
+  { key: 'payment_rate', label: '入金率', format: formatPercent, totalOnly: true },
   { key: 'recovery_rate', label: '回収率', format: formatPercent, totalOnly: true },
 ]
 
 const GROUP_LABELS = {
-  daily: '譌･蛻･',
-  weekly: '騾ｱ蛻･',
-  monthly: '譛亥挨',
+  daily: '日別',
+  weekly: '週別',
+  monthly: '月別',
 }
 
 let analysisDisplaySettings = {
@@ -57,7 +57,7 @@ let analysisDisplaySettings = {
 }
 
 export async function renderAnalysisPage(container) {
-  container.innerHTML = `<div class="empty-state">隱ｭ縺ｿ霎ｼ縺ｿ荳ｭ...</div>`
+  container.innerHTML = `<div class="empty-state">読み込み中...</div>`
 
   const [mediaList, campaignGroupList, settings] = await Promise.all([
     fetchMediaList(),
@@ -79,15 +79,15 @@ export async function renderAnalysisPage(container) {
       <div class="card">
         <div class="card-header">
           <div>
-            <div class="card-title"><i class="fa-solid fa-chart-line"></i>螳溽ｸｾ蛻・梵</div>
-            <div class="card-subtitle">蠎・相蟐剃ｽ鼎SV縺ｨ蟐剃ｽ馴寔險・SV縺ｮ螳溽ｸｾ繧呈悄髢灘挨繝ｻ蟐剃ｽ灘挨繝ｻ蠎・相繧ｳ繝ｼ繝牙挨縺ｫ髮・ｨ医＠縺ｾ縺・/div>
+            <div class="card-title"><i class="fa-solid fa-chart-line"></i>実績分析</div>
+            <div class="card-subtitle">広告媒体CSVと媒体集計CSVの実績を期間別・媒体別・キャンペーングループ別に集計します</div>
           </div>
         </div>
         ${renderFilters(state, mediaList, campaignGroupList)}
       </div>
 
       <div id="analysis-result-root">
-        <div class="card"><div class="empty-state">隱ｭ縺ｿ霎ｼ縺ｿ荳ｭ...</div></div>
+        <div class="card"><div class="empty-state">読み込み中...</div></div>
       </div>
     `
 
@@ -120,7 +120,7 @@ async function refreshAnalysis(container, state) {
     `
   } catch (err) {
     console.error(err)
-    root.innerHTML = `<div class="card"><div class="empty-state">螳溽ｸｾ繝・・繧ｿ縺ｮ蜿門ｾ励↓螟ｱ謨励＠縺ｾ縺励◆</div></div>`
+    root.innerHTML = `<div class="card"><div class="empty-state">実績データの取得に失敗しました</div></div>`
   }
 }
 
@@ -136,11 +136,11 @@ function renderFilters(state, mediaList, campaignGroupList) {
   return `
     <div class="analysis-filter-bar">
       <div class="form-row">
-        <label class="form-label">髮・ｨ亥腰菴・/label>
+        <label class="form-label">集計単位</label>
         <select id="analysis-group-by" class="form-select">
-          <option value="daily" ${state.groupBy === 'daily' ? 'selected' : ''}>譌･蛻･</option>
-          <option value="weekly" ${state.groupBy === 'weekly' ? 'selected' : ''}>騾ｱ蛻･</option>
-          <option value="monthly" ${state.groupBy === 'monthly' ? 'selected' : ''}>譛亥挨</option>
+          <option value="daily" ${state.groupBy === 'daily' ? 'selected' : ''}>日別</option>
+          <option value="weekly" ${state.groupBy === 'weekly' ? 'selected' : ''}>週別</option>
+          <option value="monthly" ${state.groupBy === 'monthly' ? 'selected' : ''}>月別</option>
         </select>
       </div>
       <div class="form-row">
@@ -152,25 +152,25 @@ function renderFilters(state, mediaList, campaignGroupList) {
         <input type="date" id="analysis-end-date" class="form-input" value="${escapeHtml(state.endDate)}" />
       </div>
       <div class="form-row">
-        <label class="form-label">蟐剃ｽ・/label>
+        <label class="form-label">媒体</label>
         <select id="analysis-media-id" class="form-select">
-          <option value="">縺吶∋縺ｦ</option>
+          <option value="">すべて</option>
           ${mediaOptions}
         </select>
       </div>
       <div class="form-row">
         <label class="form-label">キャンペーングループ</label>
         <select id="analysis-campaign-group-id" class="form-select">
-          <option value="">縺吶∋縺ｦ</option>
+          <option value="">すべて</option>
           ${campaignGroupOptions}
         </select>
       </div>
       <div class="analysis-filter-actions">
         <button class="btn btn-primary" id="analysis-filter-apply">
-          <i class="fa-solid fa-filter"></i>驕ｩ逕ｨ
+          <i class="fa-solid fa-filter"></i>適用
         </button>
         <button class="btn btn-secondary" id="analysis-filter-reset">
-          <i class="fa-solid fa-rotate-left"></i>繝ｪ繧ｻ繝・ヨ
+          <i class="fa-solid fa-rotate-left"></i>リセット
         </button>
       </div>
     </div>
@@ -224,11 +224,11 @@ function renderAnalysisTable(summary, rows, groupBy) {
       <div class="card">
         <div class="card-header">
           <div>
-            <div class="card-title"><i class="fa-solid fa-table"></i>${groupLabel}螳溽ｸｾ</div>
-            <div class="card-subtitle">譚｡莉ｶ縺ｫ荳閾ｴ縺吶ｋ螳溽ｸｾ縺後≠繧翫∪縺帙ｓ</div>
+            <div class="card-title"><i class="fa-solid fa-table"></i>${groupLabel}実績</div>
+            <div class="card-subtitle">条件に一致する実績がありません</div>
           </div>
         </div>
-        <div class="empty-state">繝・・繧ｿ蜿冶ｾｼ逕ｻ髱｢縺九ｉCSV繧貞叙霎ｼ繧薙〒縺上□縺輔＞</div>
+        <div class="empty-state">データ取込画面からCSVを取り込んでください</div>
       </div>
     `
   }
@@ -246,16 +246,16 @@ function renderAnalysisTable(summary, rows, groupBy) {
     <div class="card">
       <div class="card-header">
         <div>
-          <div class="card-title"><i class="fa-solid fa-table"></i>${groupLabel}螳溽ｸｾ</div>
-          <div class="card-subtitle">譛滄俣譏・・・蟐剃ｽ灘錐鬆・・蠎・相繧ｳ繝ｼ繝蛾・/div>
+          <div class="card-title"><i class="fa-solid fa-table"></i>${groupLabel}実績</div>
+          <div class="card-subtitle">期間昇順・媒体名順・キャンペーングループ順</div>
         </div>
       </div>
       <div class="table-scroll">
         <table class="data-table analysis-table">
           <thead>
             <tr>
-              <th>譛滄俣</th>
-              <th>蟐剃ｽ・/th>
+              <th>期間</th>
+              <th>媒体</th>
               <th>キャンペーングループ</th>
               ${METRIC_COLUMNS.map((column) => `<th class="text-right">${column.label}</th>`).join('')}
             </tr>
@@ -350,7 +350,7 @@ function formatInputDate(date) {
 
 function formatCurrency(value) {
   if (!isDisplayableNumber(value)) return '-'
-  return 'ﾂ･' + Number(value).toLocaleString('ja-JP', {
+  return '¥' + Number(value).toLocaleString('ja-JP', {
     minimumFractionDigits: analysisDisplaySettings.money_decimal_digits,
     maximumFractionDigits: analysisDisplaySettings.money_decimal_digits,
   })
@@ -358,7 +358,7 @@ function formatCurrency(value) {
 
 function formatCurrencyNoDecimal(value) {
   if (!isDisplayableNumber(value)) return '-'
-  return 'ﾂ･' + Number(value).toLocaleString('ja-JP', {
+  return '¥' + Number(value).toLocaleString('ja-JP', {
     minimumFractionDigits: analysisDisplaySettings.money_decimal_digits,
     maximumFractionDigits: analysisDisplaySettings.money_decimal_digits,
   })

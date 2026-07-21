@@ -10,7 +10,7 @@ export const renderer = jsxRenderer(({ children }) => {
   return (
     <html lang="ja">
       <head>
-        <meta charset="utf-8" />
+        <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>AdOps OS｜広告部の意思決定OS</title>
 

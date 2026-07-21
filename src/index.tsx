@@ -22,6 +22,14 @@ import { settingsRoute } from './routes/api/settings'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
+app.use('*', async (c, next) => {
+  await next()
+  const contentType = c.res.headers.get('Content-Type') || ''
+  if (contentType.startsWith('text/html')) {
+    c.res.headers.set('Content-Type', 'text/html; charset=utf-8')
+  }
+})
+
 // ------------------------------------------------------------
 // HTMLシェルのレンダラーを全ページに適用
 // ------------------------------------------------------------

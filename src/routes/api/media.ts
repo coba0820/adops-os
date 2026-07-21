@@ -71,7 +71,7 @@ mediaRoute.post('/', async (c) => {
   const currency = parseCurrency(body.currency)
   if (!currency) {
     return c.json<ApiResponse<null>>(
-      { success: false, error: 'currency 縺ｯ JPY 縺ｾ縺溘・ USD 繧呈欠螳壹＠縺ｦ縺上□縺輔＞' },
+      { success: false, error: 'currency は JPY または USD を指定してください' },
       400
     )
   }
@@ -115,7 +115,7 @@ mediaRoute.put('/:id', async (c) => {
     : parseCurrency(currentCurrency)
   if (!nextCurrency) {
     return c.json<ApiResponse<null>>(
-      { success: false, error: 'currency 縺ｯ JPY 縺ｾ縺溘・ USD 繧呈欠螳壹＠縺ｦ縺上□縺輔＞' },
+      { success: false, error: 'currency は JPY または USD を指定してください' },
       400
     )
   }
