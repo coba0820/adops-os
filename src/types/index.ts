@@ -59,6 +59,28 @@ export interface CampaignMasterView extends CampaignMaster {
   site_name: string
 }
 
+export interface CampaignGroup {
+  id: number
+  media_id: number
+  group_name: string
+  description: string | null
+  is_active: number
+  created_at: string
+  updated_at: string
+}
+
+export interface CampaignGroupView extends CampaignGroup {
+  media_name: string
+  ad_code_count: number
+}
+
+export interface CampaignGroupAdCode {
+  id: number
+  campaign_group_id: number
+  ad_code_id: number
+  created_at: string
+}
+
 /**
  * CSVアップロード履歴（upload_history）
  * v1ではCSVの実データは保存せず、メタ情報のみ記録する

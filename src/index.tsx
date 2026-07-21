@@ -12,6 +12,7 @@ import type { Bindings } from './types'
 import { mediaRoute } from './routes/api/media'
 import { siteRoute } from './routes/api/site'
 import { campaignRoute } from './routes/api/campaign'
+import { campaignGroupRoute } from './routes/api/campaign-groups'
 import { uploadRoute } from './routes/api/upload'
 import { dashboardRoute } from './routes/api/dashboard'
 import { analysisRoute } from './routes/api/analysis'
@@ -25,6 +26,8 @@ const app = new Hono<{ Bindings: Bindings }>()
 // HTMLシェルのレンダラーを全ページに適用
 // ------------------------------------------------------------
 app.use(renderer)
+
+app.route('/api/campaign-groups', campaignGroupRoute)
 
 // ------------------------------------------------------------
 // API ルーティング登録
