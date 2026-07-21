@@ -15,9 +15,9 @@
   { key: 'cpa', label: 'CPA', icon: 'fa-receipt', format: formatCurrencyNoDecimal },
   { key: 'cvr', label: 'CVR', icon: 'fa-percent', format: formatPercent },
   { key: 'payer_count', label: '蜈･驥題・焚', icon: 'fa-user-plus', format: formatInteger },
-  { key: 'revenue', label: '螢ｲ荳・, icon: 'fa-sack-dollar', format: formatCurrency },
+  { key: 'revenue', label: '売上', icon: 'fa-sack-dollar', format: formatCurrency },
   { key: 'payment_rate', label: '蜈･驥醍紫', icon: 'fa-circle-dollar-to-slot', format: formatPercent },
-  { key: 'recovery_rate', label: '蝗槫庶邇・, icon: 'fa-chart-pie', format: formatPercent },
+  { key: 'recovery_rate', label: '回収率', icon: 'fa-chart-pie', format: formatPercent },
 ]
 
 const METRIC_COLUMNS = [
@@ -37,9 +37,9 @@ const METRIC_COLUMNS = [
   { key: 'cpa', label: 'CPA', format: formatCurrencyNoDecimal },
   { key: 'cvr', label: 'CVR', format: formatPercent },
   { key: 'payer_count', label: '蜈･驥題・焚', format: formatInteger },
-  { key: 'revenue', label: '螢ｲ荳・, format: formatCurrency },
+  { key: 'revenue', label: '売上', format: formatCurrency },
   { key: 'payment_rate', label: '蜈･驥醍紫', format: formatPercent, totalOnly: true },
-  { key: 'recovery_rate', label: '蝗槫庶邇・, format: formatPercent, totalOnly: true },
+  { key: 'recovery_rate', label: '回収率', format: formatPercent, totalOnly: true },
 ]
 
 const GROUP_LABELS = {
@@ -234,7 +234,7 @@ function renderAnalysisTable(summary, rows, groupBy) {
   }
 
   const totalRow = renderTableRow({
-    period: '蜷郁ｨ・,
+    period: '合計',
     media_name: '-',
     campaign_group_name: '-',
     ...summary,
@@ -274,8 +274,8 @@ function renderTableRow(row, isTotal, groupBy) {
   return `
     <tr class="${isTotal ? 'analysis-total-row' : ''}">
       <td>${escapeHtml(isTotal ? row.period : formatPeriod(row, groupBy))}</td>
-      <td>${escapeHtml(isTotal ? '-' : row.media_name || '譛ｪ險ｭ螳・)}</td>
-      <td>${escapeHtml(isTotal ? '-' : row.campaign_group_name || '譛ｪ險ｭ螳・)}</td>
+      <td>${escapeHtml(isTotal ? '-' : row.media_name || '未設定')}</td>
+      <td>${escapeHtml(isTotal ? '-' : row.campaign_group_name || '未設定')}</td>
       ${METRIC_COLUMNS.map((column) => {
         const value = column.totalOnly && !isTotal ? null : row[column.key]
         return `<td class="text-right">${column.format(value)}</td>`
@@ -286,11 +286,11 @@ function renderTableRow(row, isTotal, groupBy) {
 
 function formatPeriod(row, groupBy) {
   if (groupBy === 'weekly') {
-    return `${formatSlashDate(row.period_start)}縲・{formatSlashDate(row.period_end)}`
+    return `${formatSlashDate(row.period_start)}〜${formatSlashDate(row.period_end)}`
   }
   if (groupBy === 'monthly') {
     const [year, month] = String(row.period_start || row.period || '').split('-')
-    if (year && month) return `${year}蟷ｴ${Number(month)}譛・
+    if (year && month) return `${year}年${Number(month)}月`
   }
   return formatSlashDate(row.period_start || row.period)
 }

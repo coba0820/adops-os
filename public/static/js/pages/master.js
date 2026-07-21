@@ -18,7 +18,7 @@ const SUB_TABS = [
 const MEDIA_STATUS_VIEW = {
   active: { label: '泙 遞ｼ蜒堺ｸｭ', badgeClass: 'badge-active' },
   paused: { label: '泯 蛛懈ｭ｢', badgeClass: 'badge-paused' },
-  archived: { label: '繧｢繝ｼ繧ｫ繧､繝・, badgeClass: 'badge-inactive' },
+  archived: { label: 'アーカイブ', badgeClass: 'badge-inactive' },
 }
 
 let activeSubTab = 'media'
@@ -137,7 +137,7 @@ function bindMediaRowEvents(root, list) {
   })
   root.querySelectorAll('[data-action="delete"]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirmDelete('縺薙・蟐剃ｽ薙ｒ蜑企勁縺励∪縺吶°・・)) return
+      if (!confirmDelete('この媒体を削除しますか？')) return
       const res = await deleteItem('/api/media', btn.dataset.id)
       if (res.success) {
         showToast('蜑企勁縺励∪縺励◆', 'success')
@@ -154,7 +154,7 @@ function openMediaModal(root, item) {
   const currentStatus = normalizeMediaStatus(item?.status)
   const currentCurrency = item?.currency || 'JPY'
   showModal({
-    title: isEdit ? '蟐剃ｽ薙ｒ邱ｨ髮・ : '蟐剃ｽ薙ｒ霑ｽ蜉',
+    title: isEdit ? '媒体を編集' : '媒体を追加',
     bodyHtml: `
       <div class="form-row">
         <label class="form-label">蟐剃ｽ灘錐</label>
@@ -257,7 +257,7 @@ function bindSiteRowEvents(root, list) {
   })
   root.querySelectorAll('[data-action="delete"]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirmDelete('縺薙・繧ｵ繧､繝医ｒ蜑企勁縺励∪縺吶°・・)) return
+      if (!confirmDelete('このサイトを削除しますか？')) return
       const res = await deleteItem('/api/site', btn.dataset.id)
       if (res.success) {
         showToast('蜑企勁縺励∪縺励◆', 'success')
@@ -272,7 +272,7 @@ function bindSiteRowEvents(root, list) {
 function openSiteModal(root, item) {
   const isEdit = !!item
   showModal({
-    title: isEdit ? '繧ｵ繧､繝医ｒ邱ｨ髮・ : '繧ｵ繧､繝医ｒ霑ｽ蜉',
+    title: isEdit ? 'サイトを編集' : 'サイトを追加',
     bodyHtml: `
       <div class="form-row">
         <label class="form-label">繧ｵ繧､繝亥錐</label>
@@ -375,7 +375,7 @@ function bindCampaignRowEvents(root, list, mediaList, siteList) {
   })
   root.querySelectorAll('[data-action="delete"]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirmDelete('縺薙・繧ｭ繝｣繝ｳ繝壹・繝ｳ繧貞炎髯､縺励∪縺吶°・・)) return
+      if (!confirmDelete('この広告コードを削除しますか？')) return
       const res = await deleteItem('/api/campaign', btn.dataset.id)
       if (res.success) {
         showToast('蜑企勁縺励∪縺励◆', 'success')
@@ -398,7 +398,7 @@ function openCampaignModal(root, item, mediaList, siteList) {
     .join('')
 
   showModal({
-    title: isEdit ? '繧ｭ繝｣繝ｳ繝壹・繝ｳ繧堤ｷｨ髮・ : '繧ｭ繝｣繝ｳ繝壹・繝ｳ繧定ｿｽ蜉',
+    title: isEdit ? '広告コードを編集' : '広告コードを追加',
     bodyHtml: `
       <div class="form-row">
         <label class="form-label">繧ｭ繝｣繝ｳ繝壹・繝ｳ蜷・/label>
@@ -438,7 +438,7 @@ function openCampaignModal(root, item, mediaList, siteList) {
       const isActive = Number(document.getElementById('modal-campaign-active').value)
 
       if (!name || !mediaId || !siteId) {
-        showToast('繧ｭ繝｣繝ｳ繝壹・繝ｳ蜷阪・蟐剃ｽ薙・繧ｵ繧､繝医・蠢・医〒縺・, 'error')
+        showToast('キャンペーン名・媒体・サイトは必須です', 'error')
         return
       }
 
