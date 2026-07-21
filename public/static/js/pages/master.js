@@ -465,7 +465,9 @@ function openCampaignModal(root, item, mediaList, siteList) {
 // ============================================================
 // キャンペーングループ管理
 // ============================================================
-async function renderCampaignGroupMaster(root, selectedGroupId = null) {
+// キャンペーングループ管理
+// ============================================================
+async function renderCampaignGroupMaster(root) {
   root.innerHTML = `<div class="empty-state">読み込み中...</div>`
 
   const [groups, mediaList] = await Promise.all([
@@ -475,29 +477,18 @@ async function renderCampaignGroupMaster(root, selectedGroupId = null) {
 
   root.innerHTML = `
     <div class="section-toolbar">
-      <p class="section-desc mt-0" style="margin-bottom:0">広告コードをキャンペーングループへまとめ、実績分析の集計単位として利用します。</p>
+      <p class="section-desc mt-0" style="margin-bottom:0">広告コードをキャンペーングループへまとめ、実績分析の集計軸として利用します。</p>
       <button class="btn btn-primary" id="campaign-group-add-btn" ${mediaList.length === 0 ? 'disabled' : ''}>
         <i class="fa-solid fa-plus"></i>グループを追加
       </button>
     </div>
-    <div class="master-split-layout">
-      <div>
-        ${renderCampaignGroupTable(groups)}
-      </div>
-      <div id="campaign-group-detail-root">
-        <div class="empty-state">グループを選択してください</div>
-      </div>
-    </div>
+    ${renderCampaignGroupTable(groups)}
   `
 
   root.querySelector('#campaign-group-add-btn')?.addEventListener('click', () =>
     openCampaignGroupModal(root, null, mediaList)
   )
   bindCampaignGroupEvents(root, groups, mediaList)
-
-  if (selectedGroupId) {
-    await renderCampaignGroupDetail(root, selectedGroupId)
-  }
 }
 
 function renderCampaignGroupTable(groups) {
@@ -508,12 +499,15 @@ function renderCampaignGroupTable(groups) {
   const rows = groups.map((group) => `
     <tr>
       <td>
-        <button class="text-link" data-action="detail" data-id="${group.id}">
+        <button class="text-link" data-action="edit-group" data-id="${group.id}">
           ${escapeHtml(group.group_name)}
         </button>
       </td>
       <td>${escapeHtml(group.media_name || '-')}</td>
-      <td>${Number(group.ad_code_count || 0).toLocaleString('ja-JP')}</td>
+      <td>
+        <button class="text-link" data-action="edit-group" data-id="${group.id}" title="所属広告コードを編集">
+          ${Number(group.ad_code_count || 0).toLocaleString('ja-JP')}</button>
+      </td>
       <td>${formatDateTime(group.updated_at || group.created_at)}</td>
       <td><span class="badge ${group.is_active ? 'badge-active' : 'badge-inactive'}">${group.is_active ? '有効' : '無効'}</span></td>
       <td>
@@ -540,9 +534,6 @@ function renderCampaignGroupTable(groups) {
 }
 
 function bindCampaignGroupEvents(root, groups, mediaList) {
-  root.querySelectorAll('[data-action="detail"]').forEach((btn) => {
-    btn.addEventListener('click', () => renderCampaignGroupDetail(root, Number(btn.dataset.id)))
-  })
   root.querySelectorAll('[data-action="edit-group"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const group = groups.find((item) => item.id === Number(btn.dataset.id))
@@ -551,7 +542,7 @@ function bindCampaignGroupEvents(root, groups, mediaList) {
   })
   root.querySelectorAll('[data-action="delete-group"]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirmDelete('このキャンペーングループを削除しますか？ 広告コード自体は削除されません。')) return
+      if (!confirmDelete('このキャンペーングループを削除しますか？広告コード自体は削除されません。')) return
       const res = await deleteItem('/api/campaign-groups', btn.dataset.id)
       if (res.success) {
         showToast('キャンペーングループを削除しました', 'success')
@@ -563,36 +554,90 @@ function bindCampaignGroupEvents(root, groups, mediaList) {
   })
 }
 
-function openCampaignGroupModal(root, group, mediaList) {
+async function openCampaignGroupModal(root, group, mediaList) {
   const isEdit = !!group
+  let detail = null
+  let selectedAdCodes = []
+  let availableAdCodes = []
+  let currentMediaId = isEdit ? String(group.media_id) : ''
+  let searchText = ''
+
+  if (isEdit) {
+    try {
+      const res = await axios.get(`/api/campaign-groups/${group.id}`)
+      detail = res.data.data
+      selectedAdCodes = detail.ad_codes || []
+      currentMediaId = String(detail.group.media_id)
+    } catch (err) {
+      console.error(err)
+      showToast(err.response?.data?.error || 'キャンペーングループの取得に失敗しました', 'error')
+      return
+    }
+  }
+
+  async function loadAvailableAdCodes() {
+    if (!currentMediaId) {
+      availableAdCodes = []
+      selectedAdCodes = []
+      return
+    }
+    const params = new URLSearchParams()
+    params.set('media_id', currentMediaId)
+    if (isEdit) params.set('group_id', group.id)
+    const res = await axios.get(`/api/campaign-groups/available-ad-codes?${params.toString()}`)
+    const list = res.data.data || []
+    const merged = new Map()
+    list.forEach((item) => merged.set(Number(item.id), item))
+    selectedAdCodes.forEach((item) => {
+      if (String(item.media_id) === currentMediaId) merged.set(Number(item.id), item)
+    })
+    availableAdCodes = [...merged.values()].sort((a, b) => String(a.ad_code || '').localeCompare(String(b.ad_code || ''), 'ja'))
+    selectedAdCodes = selectedAdCodes.filter((item) => String(item.media_id) === currentMediaId)
+  }
+
+  await loadAvailableAdCodes()
+
+  const groupData = detail?.group || group || {}
   const mediaOptions = mediaList
-    .map((media) => `<option value="${media.id}" ${isEdit && group.media_id === media.id ? 'selected' : ''}>${escapeHtml(media.media_name)}</option>`)
+    .map((media) => `<option value="${media.id}" ${String(media.id) === currentMediaId ? 'selected' : ''}>${escapeHtml(media.media_name)}</option>`)
     .join('')
 
   showModal({
-    title: isEdit ? 'キャンペーングループ編集' : 'キャンペーングループ追加',
+    title: isEdit ? 'キャンペーングループを編集' : 'キャンペーングループを追加',
+    modalClass: 'modal-box-wide',
     bodyHtml: `
-      <div class="form-row">
-        <label class="form-label">媒体</label>
-        <select id="modal-campaign-group-media" class="form-select">
-          <option value="">-- 選択してください --</option>
-          ${mediaOptions}
-        </select>
+      <div class="campaign-group-modal-grid">
+        <div class="form-row">
+          <label class="form-label">媒体</label>
+          <select id="modal-campaign-group-media" class="form-select">
+            <option value="">-- 選択してください --</option>
+            ${mediaOptions}
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label">ステータス</label>
+          <select id="modal-campaign-group-active" class="form-select">
+            <option value="1" ${!isEdit || groupData.is_active ? 'selected' : ''}>有効</option>
+            <option value="0" ${isEdit && !groupData.is_active ? 'selected' : ''}>無効</option>
+          </select>
+        </div>
       </div>
       <div class="form-row">
         <label class="form-label">グループ名</label>
-        <input type="text" id="modal-campaign-group-name" class="form-input" value="${isEdit ? escapeHtml(group.group_name) : ''}" placeholder="例 app395系" />
+        <input type="text" id="modal-campaign-group-name" class="form-input" value="${isEdit ? escapeHtml(groupData.group_name) : ''}" placeholder="例 app395系" />
       </div>
       <div class="form-row">
         <label class="form-label">説明</label>
-        <textarea id="modal-campaign-group-description" class="form-input" rows="3">${isEdit ? escapeHtml(group.description || '') : ''}</textarea>
+        <textarea id="modal-campaign-group-description" class="form-input" rows="3">${isEdit ? escapeHtml(groupData.description || '') : ''}</textarea>
       </div>
-      <div class="form-row inline">
-        <label class="form-label">ステータス</label>
-        <select id="modal-campaign-group-active" class="form-select" style="width:auto">
-          <option value="1" ${!isEdit || group.is_active ? 'selected' : ''}>有効</option>
-          <option value="0" ${isEdit && !group.is_active ? 'selected' : ''}>無効</option>
-        </select>
+      <div class="form-row">
+        <label class="form-label">広告コード選択</label>
+        <div class="campaign-ad-code-picker">
+          <input type="search" id="campaign-group-ad-code-search" class="form-input" placeholder="広告コード・キャンペーン名・サイト名で検索" />
+          <div id="campaign-group-selected-chips" class="selected-chip-list"></div>
+          <div id="campaign-group-ad-code-list" class="ad-code-choice-list"></div>
+          <div class="form-hint">既に他のキャンペーングループへ所属している広告コードは候補に表示されません。</div>
+        </div>
       </div>
     `,
     onConfirm: async () => {
@@ -601,121 +646,109 @@ function openCampaignGroupModal(root, group, mediaList) {
         group_name: document.getElementById('modal-campaign-group-name').value.trim(),
         description: document.getElementById('modal-campaign-group-description').value.trim(),
         is_active: Number(document.getElementById('modal-campaign-group-active').value),
+        ad_code_ids: selectedAdCodes.map((item) => Number(item.id)),
       }
+
       if (!payload.media_id || !payload.group_name) {
         showToast('媒体とグループ名を入力してください', 'error')
         return
       }
+      if (payload.ad_code_ids.length === 0 && !window.confirm('広告コードが選択されていません。このまま保存しますか？')) {
+        return
+      }
 
       const res = isEdit
-        ? await axios.put(`/api/campaign-groups/${group.id}`, payload).then((r) => r.data).catch((e) => e.response.data)
-        : await axios.post('/api/campaign-groups', payload).then((r) => r.data).catch((e) => e.response.data)
+        ? await axios.put(`/api/campaign-groups/${group.id}`, payload).then((r) => r.data).catch((e) => e.response?.data || { success: false })
+        : await axios.post('/api/campaign-groups', payload).then((r) => r.data).catch((e) => e.response?.data || { success: false })
 
       if (res.success) {
         closeModal()
         showToast(isEdit ? '更新しました' : '追加しました', 'success')
-        renderCampaignGroupMaster(root, isEdit ? group.id : res.data?.id)
+        renderCampaignGroupMaster(root)
       } else {
         showToast(res.error || '保存に失敗しました', 'error')
       }
     },
   })
-}
 
-async function renderCampaignGroupDetail(root, groupId) {
-  const detailRoot = root.querySelector('#campaign-group-detail-root')
-  if (!detailRoot) return
-  detailRoot.innerHTML = `<div class="empty-state">読み込み中...</div>`
+  const modal = document.getElementById('active-modal-overlay')
+  const mediaSelect = modal.querySelector('#modal-campaign-group-media')
+  const searchInput = modal.querySelector('#campaign-group-ad-code-search')
+  const listRoot = modal.querySelector('#campaign-group-ad-code-list')
+  const chipsRoot = modal.querySelector('#campaign-group-selected-chips')
 
-  try {
-    const detailRes = await axios.get(`/api/campaign-groups/${groupId}`)
-    const { group, ad_codes: adCodes } = detailRes.data.data
-    const availableRes = await axios.get(`/api/campaign-groups/available-ad-codes?group_id=${groupId}&media_id=${group.media_id}`)
-    const availableAdCodes = availableRes.data.data || []
-    detailRoot.innerHTML = renderCampaignGroupDetailHtml(group, adCodes, availableAdCodes)
-    bindCampaignGroupDetailEvents(root, group, availableAdCodes)
-  } catch (err) {
-    console.error(err)
-    detailRoot.innerHTML = `<div class="empty-state">詳細を取得できませんでした</div>`
-  }
-}
-
-function renderCampaignGroupDetailHtml(group, adCodes, availableAdCodes) {
-  const adCodeRows = adCodes.length === 0
-    ? `<tr><td colspan="4">所属広告コードはありません</td></tr>`
-    : adCodes.map((item) => `
-      <tr>
-        <td>${escapeHtml(item.ad_code || '-')}</td>
-        <td>${escapeHtml(item.campaign_name || '-')}</td>
-        <td>${escapeHtml(item.site_name || '-')}</td>
-        <td>
-          <button class="icon-btn danger" data-action="remove-group-ad-code" data-id="${item.id}" title="削除">
-            <i class="fa-solid fa-trash"></i>
-          </button>
-        </td>
-      </tr>
-    `).join('')
-
-  const options = availableAdCodes
-    .map((item) => `<option value="${item.id}">${escapeHtml(item.ad_code || '-') } / ${escapeHtml(item.campaign_name || '-')} / ${escapeHtml(item.site_name || '-')}</option>`)
-    .join('')
-
-  return `
-    <div class="card-subtitle" style="margin-bottom:12px">${escapeHtml(group.media_name || '-')}</div>
-    <div class="card-title" style="margin-bottom:12px">${escapeHtml(group.group_name)}</div>
-    <div class="form-row">
-      <label class="form-label">広告コード追加</label>
-      <select id="campaign-group-ad-code-select" class="form-select" multiple size="6">
-        ${options}
-      </select>
-      <div class="form-hint">既に他グループへ所属している広告コードは表示されません。</div>
-      <button class="btn btn-secondary" id="campaign-group-add-ad-codes" ${availableAdCodes.length === 0 ? 'disabled' : ''}>
-        <i class="fa-solid fa-plus"></i>追加
-      </button>
-    </div>
-    <div class="table-scroll">
-      <table class="data-table">
-        <thead><tr><th>広告コード</th><th>キャンペーン名</th><th>サイト</th><th style="width:80px">操作</th></tr></thead>
-        <tbody>${adCodeRows}</tbody>
-      </table>
-    </div>
-  `
-}
-
-function bindCampaignGroupDetailEvents(root, group, availableAdCodes) {
-  root.querySelector('#campaign-group-add-ad-codes')?.addEventListener('click', async () => {
-    const select = root.querySelector('#campaign-group-ad-code-select')
-    const adCodeIds = [...(select?.selectedOptions || [])].map((option) => Number(option.value))
-    if (adCodeIds.length === 0) {
-      showToast('追加する広告コードを選択してください', 'error')
-      return
-    }
-
-    try {
-      await axios.post(`/api/campaign-groups/${group.id}/ad-codes`, { ad_code_ids: adCodeIds })
-      showToast('広告コードを追加しました', 'success')
-      renderCampaignGroupDetail(root, group.id)
-    } catch (err) {
-      console.error(err)
-      showToast(err.response?.data?.error || '広告コードの追加に失敗しました', 'error')
-    }
-  })
-
-  root.querySelectorAll('[data-action="remove-group-ad-code"]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      if (!confirmDelete('この広告コードをグループから外しますか？')) return
-      try {
-        await axios.delete(`/api/campaign-groups/${group.id}/ad-codes/${btn.dataset.id}`)
-        showToast('広告コードを外しました', 'success')
-        renderCampaignGroupDetail(root, group.id)
-      } catch (err) {
-        console.error(err)
-        showToast(err.response?.data?.error || '広告コードの削除に失敗しました', 'error')
-      }
+  function renderPicker() {
+    const selectedIds = new Set(selectedAdCodes.map((item) => Number(item.id)))
+    const keyword = searchText.trim().toLowerCase()
+    const filtered = availableAdCodes.filter((item) => {
+      const haystack = `${item.ad_code || ''} ${item.campaign_name || ''} ${item.site_name || ''}`.toLowerCase()
+      return !keyword || haystack.includes(keyword)
     })
-  })
-}
 
+    chipsRoot.innerHTML = selectedAdCodes.length === 0
+      ? `<div class="form-hint">広告コードは未選択です</div>`
+      : selectedAdCodes.map((item) => `
+        <button type="button" class="selected-chip" data-id="${item.id}">
+          ${escapeHtml(item.ad_code || '-')} <span>×</span>
+        </button>
+      `).join('')
+
+    listRoot.innerHTML = !currentMediaId
+      ? `<div class="empty-state compact">媒体を選択してください</div>`
+      : filtered.length === 0
+        ? `<div class="empty-state compact">選択できる広告コードがありません</div>`
+        : filtered.map((item) => {
+          const selected = selectedIds.has(Number(item.id))
+          return `
+            <button type="button" class="ad-code-choice ${selected ? 'selected' : ''}" data-id="${item.id}">
+              <span class="ad-code-check"><i class="fa-solid ${selected ? 'fa-check' : 'fa-plus'}"></i></span>
+              <span>
+                <strong>${escapeHtml(item.ad_code || '-')}</strong>
+                <small>${escapeHtml(item.campaign_name || '-')} / ${escapeHtml(item.site_name || '-')}</small>
+              </span>
+            </button>
+          `
+        }).join('')
+
+    chipsRoot.querySelectorAll('.selected-chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        selectedAdCodes = selectedAdCodes.filter((item) => Number(item.id) !== Number(chip.dataset.id))
+        renderPicker()
+      })
+    })
+    listRoot.querySelectorAll('.ad-code-choice').forEach((choice) => {
+      choice.addEventListener('click', () => {
+        const id = Number(choice.dataset.id)
+        const exists = selectedAdCodes.some((item) => Number(item.id) === id)
+        if (exists) {
+          selectedAdCodes = selectedAdCodes.filter((item) => Number(item.id) !== id)
+        } else {
+          const item = availableAdCodes.find((candidate) => Number(candidate.id) === id)
+          if (item) selectedAdCodes = [...selectedAdCodes, item]
+        }
+        renderPicker()
+      })
+    })
+  }
+
+  searchInput.addEventListener('input', () => {
+    searchText = searchInput.value
+    renderPicker()
+  })
+  mediaSelect.addEventListener('change', async () => {
+    const beforeCount = selectedAdCodes.length
+    currentMediaId = mediaSelect.value
+    searchText = ''
+    searchInput.value = ''
+    await loadAvailableAdCodes()
+    if (beforeCount > selectedAdCodes.length) {
+      showToast('選択した媒体に属さない広告コードを解除しました', 'error')
+    }
+    renderPicker()
+  })
+
+  renderPicker()
+}
 // ============================================================
 // 蜈ｱ騾壹Θ繝ｼ繝・ぅ繝ｪ繝・ぅ
 // ============================================================
