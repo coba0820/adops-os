@@ -15,8 +15,10 @@ const SUMMARY_CARDS = [
   { key: 'cpa', label: 'CPA', icon: 'fa-receipt', format: formatCurrencyNoDecimal },
   { key: 'cvr', label: 'CVR', icon: 'fa-percent', format: formatPercent },
   { key: 'payer_count', label: '入金者数', icon: 'fa-user-plus', format: formatInteger },
+  { key: 'payment_count', label: '決済件数', icon: 'fa-receipt', format: formatInteger },
   { key: 'revenue', label: '売上', icon: 'fa-sack-dollar', format: formatCurrency },
   { key: 'payment_rate', label: '入金率', icon: 'fa-circle-dollar-to-slot', format: formatPercent },
+  { key: 'payment_cvr', label: '決済CVR', icon: 'fa-percent', format: formatPercent },
   { key: 'recovery_rate', label: '回収率', icon: 'fa-chart-pie', format: formatPercent },
 ]
 
@@ -37,8 +39,10 @@ const METRIC_COLUMNS = [
   { key: 'cpa', label: 'CPA', format: formatCurrencyNoDecimal },
   { key: 'cvr', label: 'CVR', format: formatPercent },
   { key: 'payer_count', label: '入金者数', format: formatInteger },
+  { key: 'payment_count', label: '決済件数', format: formatInteger },
   { key: 'revenue', label: '売上', format: formatCurrency },
   { key: 'payment_rate', label: '入金率', format: formatPercent, totalOnly: true },
+  { key: 'payment_cvr', label: '決済CVR', format: formatPercent, totalOnly: true },
   { key: 'recovery_rate', label: '回収率', format: formatPercent, totalOnly: true },
 ]
 
@@ -144,11 +148,11 @@ function renderFilters(state, mediaList, campaignGroupList) {
         </select>
       </div>
       <div class="form-row">
-        <label class="form-label">髢句ｧ区律</label>
+        <label class="form-label">開始日</label>
         <input type="date" id="analysis-start-date" class="form-input" value="${escapeHtml(state.startDate)}" />
       </div>
       <div class="form-row">
-        <label class="form-label">邨ゆｺ・律</label>
+        <label class="form-label">終了日</label>
         <input type="date" id="analysis-end-date" class="form-input" value="${escapeHtml(state.endDate)}" />
       </div>
       <div class="form-row">

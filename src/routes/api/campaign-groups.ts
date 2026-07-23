@@ -54,6 +54,14 @@ function normalizeAdCodeIds(value: unknown) {
   )]
 }
 
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = []
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size))
+  }
+  return chunks
+}
+
 async function fetchGroup(db: D1Database, id: number) {
   return db.prepare(
     `SELECT
@@ -116,7 +124,7 @@ async function validateAdCodes(db: D1Database, groupId: number | null, mediaId: 
   const placeholders = adCodeIds.map(() => '?').join(', ')
   const { results } = await db.prepare(
     `SELECT
-       c.id, c.media_id,
+       c.id, c.media_id, c.ad_code,
        l.campaign_group_id AS group_id,
        g.group_name
      FROM campaign_master c
@@ -125,7 +133,13 @@ async function validateAdCodes(db: D1Database, groupId: number | null, mediaId: 
      WHERE c.id IN (${placeholders})`
   )
     .bind(...adCodeIds)
-    .all<{ id: number; media_id: number; group_id: number | null; group_name: string | null }>()
+    .all<{
+      id: number
+      media_id: number
+      ad_code: string | null
+      group_id: number | null
+      group_name: string | null
+    }>()
 
   if (results.length !== adCodeIds.length) {
     throw new Error('存在しない広告コードが含まれています')
@@ -138,6 +152,37 @@ async function validateAdCodes(db: D1Database, groupId: number | null, mediaId: 
   const duplicated = results.find((campaign) => campaign.group_id && campaign.group_id !== groupId)
   if (duplicated) {
     throw new Error(`広告コードは複数グループに所属できません。既に「${duplicated.group_name ?? '別グループ'}」に所属しています`)
+  }
+
+  const selectedAdCodes = [...new Set(
+    results
+      .map((campaign) => normalizeText(campaign.ad_code))
+      .filter((adCode): adCode is string => adCode !== null)
+  )]
+
+  for (const adCodeChunk of chunkArray(selectedAdCodes, 100)) {
+    const adCodePlaceholders = adCodeChunk.map(() => '?').join(', ')
+    const conflictBindings: Array<string | number> = [...adCodeChunk]
+    const excludeCurrentGroupSql = groupId ? 'AND l.campaign_group_id <> ?' : ''
+    if (groupId) conflictBindings.push(groupId)
+
+    const conflict = await db.prepare(
+      `SELECT
+         NULLIF(TRIM(c.ad_code), '') AS ad_code,
+         g.group_name
+       FROM campaign_master c
+       INNER JOIN campaign_group_ad_codes l ON c.id = l.ad_code_id
+       INNER JOIN campaign_groups g ON l.campaign_group_id = g.id
+       WHERE NULLIF(TRIM(c.ad_code), '') IN (${adCodePlaceholders})
+         ${excludeCurrentGroupSql}
+       LIMIT 1`
+    )
+      .bind(...conflictBindings)
+      .first<{ ad_code: string; group_name: string | null }>()
+
+    if (conflict) {
+      throw new Error(`広告コード「${conflict.ad_code}」は既に「${conflict.group_name ?? '別グループ'}」に所属しています`)
+    }
   }
 }
 
@@ -183,8 +228,17 @@ campaignGroupRoute.get('/', async (c) => {
 campaignGroupRoute.get('/available-ad-codes', async (c) => {
   const groupId = parsePositiveInteger(c.req.query('group_id') ?? null)
   const mediaId = parsePositiveInteger(c.req.query('media_id') ?? null)
-  const bindings: number[] = [groupId ?? -1]
-  const where: string[] = ['(l.campaign_group_id IS NULL OR l.campaign_group_id = ?)']
+  const bindings: number[] = [groupId ?? -1, groupId ?? -1]
+  const where: string[] = [
+    '(l.campaign_group_id IS NULL OR l.campaign_group_id = ?)',
+    `NOT EXISTS (
+       SELECT 1
+       FROM campaign_master assigned_c
+       INNER JOIN campaign_group_ad_codes assigned_l ON assigned_c.id = assigned_l.ad_code_id
+       WHERE NULLIF(TRIM(assigned_c.ad_code), '') = NULLIF(TRIM(c.ad_code), '')
+         AND assigned_l.campaign_group_id <> ?
+     )`,
+  ]
 
   if (mediaId) {
     where.push('c.media_id = ?')

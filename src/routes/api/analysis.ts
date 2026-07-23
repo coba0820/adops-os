@@ -14,6 +14,7 @@ type AnalysisMetrics = {
   registration_count: number
   provisional_registration_count: number
   payer_count: number
+  payment_count: number
   revenue: number
   ctr: number | null
   cpc: number | null
@@ -24,6 +25,7 @@ type AnalysisMetrics = {
   cpa: number | null
   cvr: number | null
   payment_rate: number | null
+  payment_cvr: number | null
   recovery_rate: number | null
 }
 
@@ -65,6 +67,7 @@ type AggregateRow = {
   registration_count?: number | null
   provisional_registration_count?: number | null
   payer_count?: number | null
+  payment_count?: number | null
   revenue?: number | null
 }
 
@@ -102,6 +105,7 @@ function buildMetrics(values: {
   registrationCount: number
   provisionalRegistrationCount: number
   payerCount: number
+  paymentCount: number
   revenue: number
 }): AnalysisMetrics {
   const cvCount = values.registrationCount + values.provisionalRegistrationCount
@@ -115,6 +119,7 @@ function buildMetrics(values: {
     registration_count: values.registrationCount,
     provisional_registration_count: values.provisionalRegistrationCount,
     payer_count: values.payerCount,
+    payment_count: values.paymentCount,
     revenue: values.revenue,
     ctr: divideOrNull(values.clicks, values.impressions),
     cpc: divideOrNull(values.cost, values.clicks),
@@ -125,6 +130,7 @@ function buildMetrics(values: {
     cpa: divideOrNull(values.cost, values.registrationCount),
     cvr: divideOrNull(values.registrationCount, values.mediaCv),
     payment_rate: divideOrNull(values.payerCount, values.registrationCount),
+    payment_cvr: divideOrNull(values.paymentCount, values.registrationCount),
     recovery_rate: divideOrNull(values.revenue, values.cost),
   }
 }
@@ -141,6 +147,7 @@ function buildSummary(rows: AnalysisRow[]) {
       provisionalRegistrationCount:
         total.provisionalRegistrationCount + row.provisional_registration_count,
       payerCount: total.payerCount + row.payer_count,
+      paymentCount: total.paymentCount + row.payment_count,
       revenue: total.revenue + row.revenue,
     }),
     {
@@ -152,6 +159,7 @@ function buildSummary(rows: AnalysisRow[]) {
       registrationCount: 0,
       provisionalRegistrationCount: 0,
       payerCount: 0,
+      paymentCount: 0,
       revenue: 0,
     }
   ))
@@ -279,43 +287,46 @@ analysisRoute.get('/summary', async (c) => {
 
     const paymentAggSql = hasPaymentReportTable
       ? `
-      payment_matches AS (
+      payment_by_ad_code AS (
         SELECT
-          p.id,
           ${paymentPeriodSql.period} AS period,
           ${paymentPeriodSql.periodStart} AS period_start,
           ${paymentPeriodSql.periodEnd} AS period_end,
-          gc.group_id AS campaign_group_id,
-          gc.group_name AS campaign_group_name,
-          gc.media_id,
-          CASE
+          NULLIF(TRIM(p.ad_code), '') AS ad_code,
+          COUNT(DISTINCT CASE
             WHEN p.payment_count > 0 OR p.payment_amount > 0
             THEN COALESCE(NULLIF(TRIM(p.customer_id), ''), CAST(p.id AS TEXT))
-          END AS payer_key,
-          p.payment_amount
+          END) AS payer_count,
+          SUM(COALESCE(p.payment_count, 0)) AS payment_count,
+          SUM(COALESCE(p.payment_amount, 0)) AS revenue
         FROM payment_report_daily p
-        INNER JOIN group_ad_codes gc
-          ON NULLIF(TRIM(p.ad_code), '') = gc.ad_code
         ${paymentWhereBase.whereSql}
-      ),
-      payment_agg AS (
-        SELECT
-          period,
-          period_start,
-          period_end,
-          campaign_group_id,
-          campaign_group_name,
-          media_id,
-          COUNT(DISTINCT payer_key) AS payer_count,
-          SUM(payment_amount) AS revenue
-        FROM payment_matches
         GROUP BY
           period,
           period_start,
           period_end,
-          campaign_group_id,
-          campaign_group_name,
-          media_id
+          ad_code
+      ),
+      payment_agg AS (
+        SELECT
+          p.period,
+          p.period_start,
+          p.period_end,
+          gc.group_id AS campaign_group_id,
+          gc.group_name AS campaign_group_name,
+          gc.media_id,
+          SUM(p.payer_count) AS payer_count,
+          SUM(p.payment_count) AS payment_count,
+          SUM(p.revenue) AS revenue
+        FROM payment_by_ad_code p
+        INNER JOIN unique_group_ad_codes gc ON p.ad_code = gc.ad_code
+        GROUP BY
+          p.period,
+          p.period_start,
+          p.period_end,
+          gc.group_id,
+          gc.group_name,
+          gc.media_id
       )`
       : `
       payment_agg AS (
@@ -327,6 +338,7 @@ analysisRoute.get('/summary', async (c) => {
           '' AS campaign_group_name,
           NULL AS media_id,
           0 AS payer_count,
+          0 AS payment_count,
           0 AS revenue
         WHERE 0
       )`
@@ -353,6 +365,16 @@ analysisRoute.get('/summary', async (c) => {
           ad_code
         FROM group_campaigns
         WHERE ad_code IS NOT NULL
+      ),
+      unique_group_ad_codes AS (
+        SELECT
+          gac.ad_code,
+          MIN(gac.group_id) AS group_id,
+          MIN(gac.group_name) AS group_name,
+          MIN(gac.media_id) AS media_id
+        FROM group_ad_codes gac
+        GROUP BY gac.ad_code
+        HAVING COUNT(DISTINCT CAST(gac.group_id AS TEXT) || ':' || CAST(gac.media_id AS TEXT)) = 1
       ),
       ad_matches AS (
         SELECT DISTINCT
@@ -409,7 +431,7 @@ analysisRoute.get('/summary', async (c) => {
           SUM(s.registration_count) AS registration_count,
           SUM(s.provisional_registration_count) AS provisional_registration_count
         FROM media_summary_daily s
-        INNER JOIN group_ad_codes gc
+        INNER JOIN unique_group_ad_codes gc
           ON NULLIF(TRIM(s.ad_code), '') = gc.ad_code
         ${summaryWhere.whereSql}
         GROUP BY
@@ -444,6 +466,7 @@ analysisRoute.get('/summary', async (c) => {
         COALESCE(s.registration_count, 0) AS registration_count,
         COALESCE(s.provisional_registration_count, 0) AS provisional_registration_count,
         COALESCE(p.payer_count, 0) AS payer_count,
+        COALESCE(p.payment_count, 0) AS payment_count,
         COALESCE(p.revenue, 0) AS revenue
       FROM base_keys k
       LEFT JOIN media_master m ON k.media_id = m.id
@@ -493,6 +516,7 @@ analysisRoute.get('/summary', async (c) => {
         registrationCount: toNumber(row.registration_count),
         provisionalRegistrationCount: toNumber(row.provisional_registration_count),
         payerCount: toNumber(row.payer_count),
+        paymentCount: toNumber(row.payment_count),
         revenue: toNumber(row.revenue),
       }),
     }))
