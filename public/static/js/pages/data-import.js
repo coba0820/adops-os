@@ -22,7 +22,7 @@ const TABS = [
   {
     key: 'payment_report_csv',
     label: '③ 決済レポートCSV',
-    desc: '決済代行会社から出力される売上・決済データCSVを取り込みます。',
+    desc: '決済代行会社から出力される売上・決済データCSVを取り込みます。同じ媒体・期間は置換されます。',
     needsMedia: false,
   },
 ]
@@ -88,6 +88,9 @@ export async function renderDataImportPage(container) {
       <div class="card">
         <div class="tab-bar">${tabBarHtml}</div>
         <p class="section-desc">${currentTab.desc}</p>
+        ${currentTab.key === 'payment_report_csv'
+          ? '<div class="import-note">同じ媒体・期間の決済データは、古い明細を削除してから新しい明細を保存します。</div>'
+          : ''}
         <div id="upload-box-root"></div>
       </div>
 

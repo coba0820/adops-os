@@ -611,13 +611,15 @@ async function deleteOldPaymentReportRowsInRange(
   range: TargetDateRange,
   uploadHistoryId: number
 ) {
+  let deletedLinkedMediaRows = 0
+  let deletedNullMediaRows = 0
   const mediaIds = uniqueNumbers(rows.map((row) => row.mediaId))
   for (let i = 0; i < mediaIds.length; i += LOOKUP_BATCH_SIZE) {
     const chunk = mediaIds.slice(i, i + LOOKUP_BATCH_SIZE)
     if (chunk.length === 0) continue
 
     const placeholders = chunk.map(() => '?').join(', ')
-    await db.prepare(
+    const result = await db.prepare(
       `DELETE FROM payment_report_daily
        WHERE registration_date BETWEEN ? AND ?
          AND media_id IN (${placeholders})
@@ -625,19 +627,16 @@ async function deleteOldPaymentReportRowsInRange(
     )
       .bind(range.minDate, range.maxDate, ...chunk, uploadHistoryId)
       .run()
+    deletedLinkedMediaRows += Number(result.meta?.changes ?? 0)
   }
 
-  const unlinkedAdCodes = uniqueStrings(
-    rows
-      .filter((row) => row.mediaId === null)
-      .map((row) => row.adCode)
-  )
-  for (let i = 0; i < unlinkedAdCodes.length; i += LOOKUP_BATCH_SIZE) {
-    const chunk = unlinkedAdCodes.slice(i, i + LOOKUP_BATCH_SIZE)
+  const targetAdCodes = uniqueStrings(rows.map((row) => row.adCode))
+  for (let i = 0; i < targetAdCodes.length; i += LOOKUP_BATCH_SIZE) {
+    const chunk = targetAdCodes.slice(i, i + LOOKUP_BATCH_SIZE)
     if (chunk.length === 0) continue
 
     const placeholders = chunk.map(() => '?').join(', ')
-    await db.prepare(
+    const result = await db.prepare(
       `DELETE FROM payment_report_daily
        WHERE registration_date BETWEEN ? AND ?
          AND media_id IS NULL
@@ -646,6 +645,12 @@ async function deleteOldPaymentReportRowsInRange(
     )
       .bind(range.minDate, range.maxDate, ...chunk, uploadHistoryId)
       .run()
+    deletedNullMediaRows += Number(result.meta?.changes ?? 0)
+  }
+
+  return {
+    deletedLinkedMediaRows,
+    deletedNullMediaRows,
   }
 }
 
@@ -1301,6 +1306,19 @@ uploadRoute.post('/', async (c) => {
       if (preparedPaymentReportRows.length === 0) {
         throw new Error('決済レポートCSVに保存対象の明細行がありません')
       }
+
+      const unlinkedPaymentAdCodes = uniqueStrings(
+        preparedPaymentReportRows
+          .filter((row) => row.mediaId === null)
+          .map((row) => row.adCode)
+      )
+      if (unlinkedPaymentAdCodes.length > 0) {
+        const examples = unlinkedPaymentAdCodes.slice(0, 10).join(', ')
+        const suffix = unlinkedPaymentAdCodes.length > 10 ? ' ほか' : ''
+        throw new Error(
+          `決済レポートに媒体を特定できない広告コードがあります。キャンペーンマスタを確認してください: ${examples}${suffix}`
+        )
+      }
     }
   } catch (err) {
     logUploadError('detail preparation failed before upload_history insert', {
@@ -1483,6 +1501,24 @@ uploadRoute.post('/', async (c) => {
         throw new Error('決済レポートCSVに保存対象の明細行がありません')
       }
 
+      if (paymentReportDateRange) {
+        const cleanupResult = await deleteOldPaymentReportRowsInRange(
+          c.env.DB,
+          preparedPaymentReportRows,
+          paymentReportDateRange,
+          uploadHistoryId
+        )
+        logUploadInfo('payment_report_daily old rows cleaned before insert', {
+          uploadHistoryId,
+          minTargetDate: paymentReportDateRange.minDate,
+          maxTargetDate: paymentReportDateRange.maxDate,
+          mediaIds: uniqueNumbers(preparedPaymentReportRows.map((row) => row.mediaId)).length,
+          targetAdCodes: uniqueStrings(preparedPaymentReportRows.map((row) => row.adCode)).length,
+          deletedLinkedMediaRows: cleanupResult.deletedLinkedMediaRows,
+          deletedNullMediaRows: cleanupResult.deletedNullMediaRows,
+        })
+      }
+
       for (let i = 0; i < preparedPaymentReportRows.length; i += INSERT_BATCH_SIZE) {
         const chunk = preparedPaymentReportRows.slice(i, i + INSERT_BATCH_SIZE)
         await c.env.DB.batch(
@@ -1513,26 +1549,6 @@ uploadRoute.post('/', async (c) => {
         uploadHistoryId,
         savedRows,
       })
-
-      if (paymentReportDateRange) {
-        await deleteOldPaymentReportRowsInRange(
-          c.env.DB,
-          preparedPaymentReportRows,
-          paymentReportDateRange,
-          uploadHistoryId
-        )
-        logUploadInfo('payment_report_daily old rows cleaned', {
-          uploadHistoryId,
-          minTargetDate: paymentReportDateRange.minDate,
-          maxTargetDate: paymentReportDateRange.maxDate,
-          mediaIds: uniqueNumbers(preparedPaymentReportRows.map((row) => row.mediaId)).length,
-          unlinkedAdCodes: uniqueStrings(
-            preparedPaymentReportRows
-              .filter((row) => row.mediaId === null)
-              .map((row) => row.adCode)
-          ).length,
-        })
-      }
     }
   } catch (err) {
     logUploadError('detail insert failed', {
