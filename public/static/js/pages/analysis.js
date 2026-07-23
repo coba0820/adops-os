@@ -39,10 +39,8 @@ const METRIC_COLUMNS = [
   { key: 'cpa', label: 'CPA', format: formatCurrencyNoDecimal },
   { key: 'cvr', label: 'CVR', format: formatPercent },
   { key: 'payer_count', label: '入金者数', format: formatInteger },
-  { key: 'payment_count', label: '決済件数', format: formatInteger },
   { key: 'revenue', label: '売上', format: formatCurrency },
   { key: 'payment_rate', label: '入金率', format: formatPercent, totalOnly: true },
-  { key: 'payment_cvr', label: '決済CVR', format: formatPercent, totalOnly: true },
   { key: 'recovery_rate', label: '回収率', format: formatPercent, totalOnly: true },
 ]
 
@@ -120,7 +118,7 @@ async function refreshAnalysis(container, state) {
 
     root.innerHTML = `
       ${renderSummaryCards(data.summary)}
-      ${renderAnalysisTable(data.summary, data.rows, state.groupBy)}
+      ${renderAnalysisTable(data.summary, data.rows, state)}
     `
   } catch (err) {
     console.error(err)
@@ -186,6 +184,7 @@ function bindFilterEvents(container, state, redraw) {
     state.groupBy = container.querySelector('#analysis-group-by')?.value || 'daily'
     state.startDate = container.querySelector('#analysis-start-date')?.value || ''
     state.endDate = container.querySelector('#analysis-end-date')?.value || ''
+    state.mediaId = container.querySelector('#analysis-media-id')?.value || ''
     state.campaignGroupId = container.querySelector('#analysis-campaign-group-id')?.value || ''
     refreshAnalysis(container, state)
   })
@@ -220,8 +219,16 @@ function renderSummaryCards(summary) {
   `
 }
 
-function renderAnalysisTable(summary, rows, groupBy) {
+function renderAnalysisTable(summary, rows, state) {
+  const groupBy = state.groupBy
   const groupLabel = GROUP_LABELS[groupBy] || GROUP_LABELS.daily
+  const showMediaColumn = Boolean(state.mediaId)
+  const showCampaignGroupColumn = Boolean(state.campaignGroupId)
+  const sortLabel = [
+    '期間昇順',
+    showMediaColumn ? '媒体名順' : '',
+    showCampaignGroupColumn ? 'キャンペーングループ順' : '',
+  ].filter(Boolean).join('・')
 
   if (!rows || rows.length === 0) {
     return `
@@ -242,16 +249,18 @@ function renderAnalysisTable(summary, rows, groupBy) {
     media_name: '-',
     campaign_group_name: '-',
     ...summary,
-  }, true, groupBy)
+  }, true, groupBy, { showMediaColumn, showCampaignGroupColumn })
 
-  const bodyRows = rows.map((row) => renderTableRow(row, false, groupBy)).join('')
+  const bodyRows = rows
+    .map((row) => renderTableRow(row, false, groupBy, { showMediaColumn, showCampaignGroupColumn }))
+    .join('')
 
   return `
     <div class="card">
       <div class="card-header">
         <div>
           <div class="card-title"><i class="fa-solid fa-table"></i>${groupLabel}実績</div>
-          <div class="card-subtitle">期間昇順・媒体名順・キャンペーングループ順</div>
+          <div class="card-subtitle">${sortLabel}</div>
         </div>
       </div>
       <div class="table-scroll">
@@ -259,8 +268,8 @@ function renderAnalysisTable(summary, rows, groupBy) {
           <thead>
             <tr>
               <th>期間</th>
-              <th>媒体</th>
-              <th>キャンペーングループ</th>
+              ${showMediaColumn ? '<th>媒体</th>' : ''}
+              ${showCampaignGroupColumn ? '<th>キャンペーングループ</th>' : ''}
               ${METRIC_COLUMNS.map((column) => `<th class="text-right">${column.label}</th>`).join('')}
             </tr>
           </thead>
@@ -274,12 +283,12 @@ function renderAnalysisTable(summary, rows, groupBy) {
   `
 }
 
-function renderTableRow(row, isTotal, groupBy) {
+function renderTableRow(row, isTotal, groupBy, options) {
   return `
     <tr class="${isTotal ? 'analysis-total-row' : ''}">
       <td>${escapeHtml(isTotal ? row.period : formatPeriod(row, groupBy))}</td>
-      <td>${escapeHtml(isTotal ? '-' : row.media_name || '未設定')}</td>
-      <td>${escapeHtml(isTotal ? '-' : row.campaign_group_name || '未設定')}</td>
+      ${options.showMediaColumn ? `<td>${escapeHtml(isTotal ? '-' : row.media_name || '未設定')}</td>` : ''}
+      ${options.showCampaignGroupColumn ? `<td>${escapeHtml(isTotal ? '-' : row.campaign_group_name || '未設定')}</td>` : ''}
       ${METRIC_COLUMNS.map((column) => {
         const value = column.totalOnly && !isTotal ? null : row[column.key]
         return `<td class="text-right">${column.format(value)}</td>`

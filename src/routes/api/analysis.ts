@@ -165,6 +165,99 @@ function buildSummary(rows: AnalysisRow[]) {
   ))
 }
 
+function aggregateRowsForDisplay(rows: AnalysisRow[], filters: {
+  mediaId: number | null
+  campaignGroupId: number | null
+}) {
+  const includeMedia = filters.mediaId !== null
+  const includeCampaignGroup = filters.campaignGroupId !== null
+  const rowMap = new Map<string, {
+    period: string
+    period_start: string
+    period_end: string
+    media_id: number | null
+    media_name: string
+    campaign_group_id: number | null
+    campaign_group_name: string
+    totals: {
+      cost: number
+      impressions: number
+      clicks: number
+      mediaCv: number
+      accessCount: number
+      registrationCount: number
+      provisionalRegistrationCount: number
+      payerCount: number
+      paymentCount: number
+      revenue: number
+    }
+  }>()
+
+  for (const row of rows) {
+    const key = [
+      row.period_start,
+      row.period_end,
+      includeMedia ? row.media_id ?? 'null' : 'all-media',
+      includeCampaignGroup ? row.campaign_group_id ?? 'null' : 'all-groups',
+    ].join('|')
+    const current = rowMap.get(key)
+
+    if (!current) {
+      rowMap.set(key, {
+        period: row.period,
+        period_start: row.period_start,
+        period_end: row.period_end,
+        media_id: includeMedia ? row.media_id : null,
+        media_name: includeMedia ? row.media_name : '',
+        campaign_group_id: includeCampaignGroup ? row.campaign_group_id : null,
+        campaign_group_name: includeCampaignGroup ? row.campaign_group_name : '',
+        totals: {
+          cost: row.cost,
+          impressions: row.impressions,
+          clicks: row.clicks,
+          mediaCv: row.media_cv,
+          accessCount: row.access_count,
+          registrationCount: row.registration_count,
+          provisionalRegistrationCount: row.provisional_registration_count,
+          payerCount: row.payer_count,
+          paymentCount: row.payment_count,
+          revenue: row.revenue,
+        },
+      })
+      continue
+    }
+
+    current.totals.cost += row.cost
+    current.totals.impressions += row.impressions
+    current.totals.clicks += row.clicks
+    current.totals.mediaCv += row.media_cv
+    current.totals.accessCount += row.access_count
+    current.totals.registrationCount += row.registration_count
+    current.totals.provisionalRegistrationCount += row.provisional_registration_count
+    current.totals.payerCount += row.payer_count
+    current.totals.paymentCount += row.payment_count
+    current.totals.revenue += row.revenue
+  }
+
+  return [...rowMap.values()]
+    .map((row) => ({
+      period: row.period,
+      period_start: row.period_start,
+      period_end: row.period_end,
+      media_id: row.media_id,
+      media_name: row.media_name,
+      campaign_group_id: row.campaign_group_id,
+      campaign_group_name: row.campaign_group_name,
+      ...buildMetrics(row.totals),
+    }))
+    .sort((a, b) =>
+      a.period_start.localeCompare(b.period_start) ||
+      a.period_end.localeCompare(b.period_end) ||
+      a.media_name.localeCompare(b.media_name) ||
+      a.campaign_group_name.localeCompare(b.campaign_group_name)
+    )
+}
+
 function prepareWithBindings(
   db: D1Database,
   sql: string,
@@ -499,7 +592,7 @@ analysisRoute.get('/summary', async (c) => {
       ]
     ).all<AggregateRow>()
 
-    const rows = results.map((row) => ({
+    const detailRows = results.map((row) => ({
       period: row.period,
       period_start: row.period_start,
       period_end: row.period_end,
@@ -520,6 +613,7 @@ analysisRoute.get('/summary', async (c) => {
         revenue: toNumber(row.revenue),
       }),
     }))
+    const rows = aggregateRowsForDisplay(detailRows, { mediaId, campaignGroupId })
     const summary = buildSummary(rows)
 
     return c.json<ApiResponse<AnalysisResponse>>({
