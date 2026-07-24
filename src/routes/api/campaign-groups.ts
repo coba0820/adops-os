@@ -22,7 +22,10 @@ type CampaignGroupAdCodeView = {
   media_name: string
   ad_code: string | null
   site_id: number
+  site_ids?: number[]
   site_name: string
+  site_names?: string
+  site_count?: number
   is_active: number
   group_id: number | null
   group_name: string | null
@@ -82,14 +85,29 @@ async function fetchGroupAdCodes(db: D1Database, id: number) {
   const { results } = await db.prepare(
     `SELECT
        c.id, c.campaign_name, c.media_id, m.media_name, c.ad_code,
-       c.site_id, s.site_name, c.is_active,
+       c.site_id,
+       COALESCE(
+         CASE
+           WHEN COUNT(DISTINCT acs.site_id) = 1 THEN MAX(s.site_name)
+           WHEN COUNT(DISTINCT acs.site_id) > 1 THEN COUNT(DISTINCT acs.site_id) || 'サイト'
+         END,
+         legacy_site.site_name,
+         ''
+       ) AS site_name,
+       COALESCE(GROUP_CONCAT(DISTINCT s.site_name), legacy_site.site_name, '') AS site_names,
+       COUNT(DISTINCT acs.site_id) AS site_count,
+       COALESCE(GROUP_CONCAT(DISTINCT acs.site_id), CAST(c.site_id AS TEXT)) AS site_ids,
+       c.is_active,
        g.id AS group_id, g.group_name
      FROM campaign_group_ad_codes l
      INNER JOIN campaign_master c ON l.ad_code_id = c.id
      LEFT JOIN media_master m ON c.media_id = m.id
-     LEFT JOIN site_master s ON c.site_id = s.id
+     LEFT JOIN ad_code_sites acs ON c.id = acs.ad_code_id
+     LEFT JOIN site_master s ON acs.site_id = s.id
+     LEFT JOIN site_master legacy_site ON c.site_id = legacy_site.id
      LEFT JOIN campaign_groups g ON l.campaign_group_id = g.id
      WHERE l.campaign_group_id = ?
+     GROUP BY c.id, g.id
      ORDER BY c.ad_code ASC, c.id ASC`
   )
     .bind(id)
@@ -248,15 +266,30 @@ campaignGroupRoute.get('/available-ad-codes', async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT
        c.id, c.campaign_name, c.media_id, m.media_name, c.ad_code,
-       c.site_id, s.site_name, c.is_active,
+       c.site_id,
+       COALESCE(
+         CASE
+           WHEN COUNT(DISTINCT acs.site_id) = 1 THEN MAX(s.site_name)
+           WHEN COUNT(DISTINCT acs.site_id) > 1 THEN COUNT(DISTINCT acs.site_id) || 'サイト'
+         END,
+         legacy_site.site_name,
+         ''
+       ) AS site_name,
+       COALESCE(GROUP_CONCAT(DISTINCT s.site_name), legacy_site.site_name, '') AS site_names,
+       COUNT(DISTINCT acs.site_id) AS site_count,
+       COALESCE(GROUP_CONCAT(DISTINCT acs.site_id), CAST(c.site_id AS TEXT)) AS site_ids,
+       c.is_active,
        l.campaign_group_id AS group_id,
        g.group_name
      FROM campaign_master c
      LEFT JOIN campaign_group_ad_codes l ON c.id = l.ad_code_id
      LEFT JOIN campaign_groups g ON l.campaign_group_id = g.id
      LEFT JOIN media_master m ON c.media_id = m.id
-     LEFT JOIN site_master s ON c.site_id = s.id
+     LEFT JOIN ad_code_sites acs ON c.id = acs.ad_code_id
+     LEFT JOIN site_master s ON acs.site_id = s.id
+     LEFT JOIN site_master legacy_site ON c.site_id = legacy_site.id
      WHERE ${where.join(' AND ')}
+     GROUP BY c.id, l.campaign_group_id
      ORDER BY c.ad_code ASC, c.id ASC`
   )
     .bind(...bindings)

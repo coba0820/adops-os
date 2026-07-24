@@ -76,7 +76,9 @@ siteRoute.delete('/:id', async (c) => {
   const id = c.req.param('id')
 
   const used = await c.env.DB.prepare(
-    'SELECT COUNT(*) as cnt FROM campaign_master WHERE site_id = ?'
+    `SELECT COUNT(*) as cnt
+     FROM ad_code_sites
+     WHERE site_id = ?`
   )
     .bind(id)
     .first<{ cnt: number }>()

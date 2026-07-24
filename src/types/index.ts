@@ -46,6 +46,7 @@ export interface CampaignMaster {
   media_id: number
   ad_code: string | null
   site_id: number
+  site_ids?: number[]
   is_active: number // 1=有効, 0=無効
   created_at: string
   updated_at: string
@@ -57,6 +58,8 @@ export interface CampaignMaster {
 export interface CampaignMasterView extends CampaignMaster {
   media_name: string
   site_name: string
+  site_names?: string
+  site_count?: number
 }
 
 export interface CampaignGroup {
