@@ -4,6 +4,7 @@
 // ============================================================
 import { showModal, closeModal, confirmDelete } from '../components/modal.js'
 import { showToast } from '../components/toast.js'
+import { parseXlsxFile } from '../components/xlsx-parser.js'
 
 const SUB_TABS = [
   { key: 'media', label: '媒体マスタ' },
@@ -22,7 +23,7 @@ let activeSubTab = 'media'
 
 /**
  * マスタ管理画面を描画する
- * @param {HTMLElement} container #main-content 隕∫ｴ
+ * @param {HTMLElement} container #main-content 要素
  */
 export function renderMasterPage(container) {
   drawShell(container)
@@ -312,15 +313,25 @@ async function renderCampaignMaster(root) {
   root.innerHTML = `
     <div class="section-toolbar">
       <p class="section-desc mt-0" style="margin-bottom:0">「媒体 → 広告コード → サイト」を紐付ける重要なマスタです。</p>
-      <button class="btn btn-primary" id="campaign-add-btn" ${mediaList.length === 0 || siteList.length === 0 ? 'disabled' : ''}>
-        <i class="fa-solid fa-plus"></i>広告コードを追加
-      </button>
+      <div class="action-btn-group">
+        <button class="btn btn-secondary" id="campaign-template-download-btn">
+          <i class="fa-solid fa-download"></i>テンプレートをダウンロード
+        </button>
+        <button class="btn btn-secondary" id="campaign-bulk-import-btn" ${mediaList.length === 0 || siteList.length === 0 ? 'disabled' : ''}>
+          <i class="fa-solid fa-file-import"></i>CSV/XLSX一括取込
+        </button>
+        <button class="btn btn-primary" id="campaign-add-btn" ${mediaList.length === 0 || siteList.length === 0 ? 'disabled' : ''}>
+          <i class="fa-solid fa-plus"></i>広告コードを追加
+        </button>
+      </div>
     </div>
     ${mediaList.length === 0 || siteList.length === 0 ? '<div class="form-hint" style="margin-bottom:16px">※ 先に媒体マスタ・サイトマスタを1件以上登録してください</div>' : ''}
     ${renderCampaignTable(campaigns)}
   `
 
   root.querySelector('#campaign-add-btn')?.addEventListener('click', () => openCampaignModal(root, null, mediaList, siteList))
+  root.querySelector('#campaign-bulk-import-btn')?.addEventListener('click', () => openCampaignBulkImportModal(root))
+  root.querySelector('#campaign-template-download-btn')?.addEventListener('click', downloadCampaignTemplate)
   bindCampaignRowEvents(root, campaigns, mediaList, siteList)
 }
 
@@ -411,7 +422,7 @@ function openCampaignModal(root, item, mediaList, siteList) {
       </div>
       <div class="form-row">
         <label class="form-label">広告コード</label>
-        <input type="text" id="modal-campaign-adcode" class="form-input" value="${isEdit ? escapeHtml(item.ad_code || '') : ''}" placeholder="萓・ GAD-001" />
+        <input type="text" id="modal-campaign-adcode" class="form-input" value="${isEdit ? escapeHtml(item.ad_code || '') : ''}" placeholder="例 GAD-001" />
       </div>
       <div class="form-row">
         <label class="form-label">サイト</label>
@@ -545,6 +556,383 @@ function formatCampaignSiteLabel(item) {
   const count = Number(item.site_count || getCampaignSiteIds(item).length || 0)
   if (count > 1) return `${count.toLocaleString('ja-JP')}サイト`
   return item.site_name || '-'
+}
+
+function downloadCampaignTemplate() {
+  const link = document.createElement('a')
+  link.href = '/api/campaign/template'
+  link.download = '広告コード一括取込テンプレート.csv'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+}
+
+function openCampaignBulkImportModal(root) {
+  let parsedRows = []
+  let selectedFileName = ''
+  let previewData = null
+  let importData = null
+  let showErrorsOnly = false
+
+  showModal({
+    title: '広告コードをCSV/XLSXで一括取込',
+    modalClass: 'modal-box-wide',
+    confirmLabel: '取込を実行',
+    bodyHtml: `
+      <div class="campaign-bulk-modal">
+        <div class="form-row">
+          <label class="form-label">取込モード</label>
+          <select id="campaign-bulk-mode" class="form-select">
+            <option value="upsert">追加＋更新</option>
+            <option value="create_only">追加のみ</option>
+            <option value="update_only">更新のみ</option>
+          </select>
+          <div class="form-hint">正常行だけ保存します。エラー行は保存されません。サイト紐付けはファイル内容で置き換えます。</div>
+        </div>
+        <div class="form-row">
+          <label class="form-label">ファイル</label>
+          <input type="file" id="campaign-bulk-file" class="form-input" accept=".csv,.xlsx" />
+          <div id="campaign-bulk-file-status" class="form-hint">CSVはUTF-8 / UTF-8 BOM / Shift_JISに対応しています。</div>
+        </div>
+        <div class="campaign-bulk-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="campaign-bulk-preview-btn">
+            <i class="fa-solid fa-magnifying-glass"></i>プレビュー
+          </button>
+          <label class="campaign-bulk-error-toggle">
+            <input type="checkbox" id="campaign-bulk-errors-only" />
+            エラー行のみ表示
+          </label>
+          <button type="button" class="btn btn-secondary btn-sm" id="campaign-bulk-result-download-btn" disabled>
+            <i class="fa-solid fa-file-arrow-down"></i>エラー/スキップCSV
+          </button>
+        </div>
+        <div id="campaign-bulk-summary" class="campaign-bulk-summary"></div>
+        <div id="campaign-bulk-preview-root" class="campaign-bulk-preview-root">
+          <div class="empty-state compact">ファイルを選択してプレビューしてください</div>
+        </div>
+      </div>
+    `,
+    onConfirm: async () => {
+      if (!previewData) {
+        showToast('先にプレビューを実行してください', 'error')
+        return
+      }
+
+      const targetCount = Number(previewData.summary.create || 0) + Number(previewData.summary.update || 0)
+      if (targetCount === 0) {
+        showToast('取込対象の正常行がありません', 'error')
+        return
+      }
+
+      if (!window.confirm(`正常行 ${targetCount.toLocaleString('ja-JP')} 件を取り込みます。よろしいですか？`)) return
+
+      const confirmButton = document.getElementById('modal-confirm-btn')
+      if (confirmButton) {
+        confirmButton.disabled = true
+        confirmButton.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>取込中'
+      }
+
+      const res = await axios.post('/api/campaign/bulk-import', {
+        mode: getCampaignBulkMode(),
+        rows: parsedRows,
+      }).then((r) => r.data).catch((e) => e.response?.data || { success: false, error: '一括取込に失敗しました' })
+
+      if (confirmButton) {
+        confirmButton.disabled = false
+        confirmButton.innerHTML = '取込を実行'
+      }
+
+      if (!res.success) {
+        showToast(res.error || '一括取込に失敗しました', 'error')
+        return
+      }
+
+      importData = res.data
+      previewData = res.data
+      renderCampaignBulkPreview(previewData, {
+        root: document.getElementById('campaign-bulk-preview-root'),
+        summaryRoot: document.getElementById('campaign-bulk-summary'),
+        showErrorsOnly,
+        fileName: selectedFileName,
+      })
+      document.getElementById('campaign-bulk-result-download-btn').disabled = !hasCampaignBulkResultRows(importData)
+      showToast('広告コードマスタを一括取込しました', 'success')
+      renderCampaignMaster(root)
+    },
+  })
+
+  const modal = document.getElementById('active-modal-overlay')
+  const fileInput = modal.querySelector('#campaign-bulk-file')
+  const fileStatus = modal.querySelector('#campaign-bulk-file-status')
+  const previewButton = modal.querySelector('#campaign-bulk-preview-btn')
+  const errorsOnlyInput = modal.querySelector('#campaign-bulk-errors-only')
+  const resultDownloadButton = modal.querySelector('#campaign-bulk-result-download-btn')
+  const confirmButton = modal.querySelector('#modal-confirm-btn')
+  const summaryRoot = modal.querySelector('#campaign-bulk-summary')
+  const previewRoot = modal.querySelector('#campaign-bulk-preview-root')
+
+  if (confirmButton) confirmButton.disabled = true
+
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files?.[0]
+    previewData = null
+    importData = null
+    parsedRows = []
+    selectedFileName = file?.name || ''
+    summaryRoot.innerHTML = ''
+    previewRoot.innerHTML = '<div class="empty-state compact">ファイルを解析しています...</div>'
+    resultDownloadButton.disabled = true
+    if (confirmButton) confirmButton.disabled = true
+
+    if (!file) {
+      fileStatus.textContent = 'CSVはUTF-8 / UTF-8 BOM / Shift_JISに対応しています。'
+      previewRoot.innerHTML = '<div class="empty-state compact">ファイルを選択してプレビューしてください</div>'
+      return
+    }
+
+    try {
+      parsedRows = await parseCampaignBulkFile(file)
+      fileStatus.textContent = `${file.name} / ${parsedRows.length.toLocaleString('ja-JP')}行を読み込みました`
+      previewRoot.innerHTML = '<div class="empty-state compact">プレビューを実行してください</div>'
+    } catch (err) {
+      fileStatus.textContent = file.name
+      previewRoot.innerHTML = `<div class="empty-state compact">${escapeHtml(err.message || 'ファイル解析に失敗しました')}</div>`
+      showToast(err.message || 'ファイル解析に失敗しました', 'error')
+    }
+  })
+
+  modal.querySelector('#campaign-bulk-mode').addEventListener('change', () => {
+    previewData = null
+    importData = null
+    summaryRoot.innerHTML = ''
+    previewRoot.innerHTML = '<div class="empty-state compact">モードを変更しました。再度プレビューしてください</div>'
+    resultDownloadButton.disabled = true
+    if (confirmButton) confirmButton.disabled = true
+  })
+
+  previewButton.addEventListener('click', async () => {
+    if (parsedRows.length === 0) {
+      showToast('取込ファイルを選択してください', 'error')
+      return
+    }
+
+    previewButton.disabled = true
+    previewButton.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>確認中'
+    const res = await axios.post('/api/campaign/bulk-preview', {
+      mode: getCampaignBulkMode(),
+      rows: parsedRows,
+    }).then((r) => r.data).catch((e) => e.response?.data || { success: false, error: 'プレビューに失敗しました' })
+    previewButton.disabled = false
+    previewButton.innerHTML = '<i class="fa-solid fa-magnifying-glass"></i>プレビュー'
+
+    if (!res.success) {
+      showToast(res.error || 'プレビューに失敗しました', 'error')
+      previewRoot.innerHTML = `<div class="empty-state compact">${escapeHtml(res.error || 'プレビューに失敗しました')}</div>`
+      if (confirmButton) confirmButton.disabled = true
+      return
+    }
+
+    previewData = res.data
+    importData = null
+    renderCampaignBulkPreview(previewData, { root: previewRoot, summaryRoot, showErrorsOnly, fileName: selectedFileName })
+    resultDownloadButton.disabled = !hasCampaignBulkResultRows(previewData)
+    if (confirmButton) {
+      confirmButton.disabled = (Number(previewData.summary.create || 0) + Number(previewData.summary.update || 0)) === 0
+    }
+  })
+
+  errorsOnlyInput.addEventListener('change', () => {
+    showErrorsOnly = errorsOnlyInput.checked
+    if (previewData) {
+      renderCampaignBulkPreview(previewData, { root: previewRoot, summaryRoot, showErrorsOnly, fileName: selectedFileName })
+    }
+  })
+
+  resultDownloadButton.addEventListener('click', () => {
+    const data = importData || previewData
+    if (!data || !hasCampaignBulkResultRows(data)) return
+    downloadCampaignBulkResultCsv(data.rows, selectedFileName)
+  })
+}
+
+function getCampaignBulkMode() {
+  return document.getElementById('campaign-bulk-mode')?.value || 'upsert'
+}
+
+async function parseCampaignBulkFile(file) {
+  const lowerName = file.name.toLowerCase()
+  if (lowerName.endsWith('.xlsx')) {
+    const parsed = await parseXlsxFile(file)
+    return parsed.rows || []
+  }
+  if (lowerName.endsWith('.csv')) {
+    const text = await readCampaignCsvText(file)
+    return parseCampaignCsvText(text)
+  }
+  throw new Error('CSVまたはXLSXファイルを選択してください')
+}
+
+async function readCampaignCsvText(file) {
+  const buffer = await file.arrayBuffer()
+  const utf8 = new TextDecoder('utf-8').decode(buffer)
+  let sjis = ''
+  try {
+    sjis = new TextDecoder('shift_jis').decode(buffer)
+  } catch (_) {
+    sjis = utf8
+  }
+
+  const score = (text) => (text.match(/\uFFFD/g) || []).length
+  const selected = score(sjis) < score(utf8) ? sjis : utf8
+  return selected.replace(/^\uFEFF/, '')
+}
+
+function parseCampaignCsvText(text) {
+  const rows = []
+  let row = []
+  let cell = ''
+  let inQuotes = false
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    const next = text[index + 1]
+
+    if (char === '"') {
+      if (inQuotes && next === '"') {
+        cell += '"'
+        index += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+    } else if (char === ',' && !inQuotes) {
+      row.push(cell)
+      cell = ''
+    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && next === '\n') index += 1
+      row.push(cell)
+      rows.push(row)
+      row = []
+      cell = ''
+    } else {
+      cell += char
+    }
+  }
+
+  row.push(cell)
+  if (row.some((value) => String(value).trim() !== '')) rows.push(row)
+
+  return rows
+}
+
+function renderCampaignBulkPreview(data, { root, summaryRoot, showErrorsOnly, fileName }) {
+  const rows = showErrorsOnly
+    ? data.rows.filter((row) => row.judgement === 'エラー')
+    : data.rows
+  const displayRows = rows.slice(0, 500)
+  const hiddenCount = Math.max(rows.length - displayRows.length, 0)
+  const savedCount = Number(data.created_count || 0) + Number(data.updated_count || 0)
+
+  summaryRoot.innerHTML = `
+    <div class="campaign-bulk-summary-grid">
+      ${renderBulkSummaryItem('対象ファイル', fileName || '-')}
+      ${renderBulkSummaryItem('全体', data.summary.total)}
+      ${renderBulkSummaryItem('新規', data.summary.create)}
+      ${renderBulkSummaryItem('更新', data.summary.update)}
+      ${renderBulkSummaryItem('スキップ', data.summary.skip)}
+      ${renderBulkSummaryItem('エラー', data.summary.error)}
+      ${savedCount > 0 ? renderBulkSummaryItem('保存済み', savedCount) : ''}
+    </div>
+  `
+
+  if (data.rows.length === 0) {
+    root.innerHTML = '<div class="empty-state compact">取込対象行がありません</div>'
+    return
+  }
+
+  root.innerHTML = `
+    ${hiddenCount > 0 ? `<div class="form-hint" style="margin-bottom:8px">表示は先頭500行までです。残り${hiddenCount.toLocaleString('ja-JP')}行も取込対象に含まれます。</div>` : ''}
+    <div class="table-scroll campaign-bulk-table-scroll">
+      <table class="data-table campaign-bulk-table">
+        <thead>
+          <tr>
+            <th>行</th><th>キャンペーン名</th><th>媒体</th><th>広告コード</th><th>サイト</th><th>状態</th><th>判定</th><th>エラー/理由</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${displayRows.map((row) => `
+            <tr class="${row.judgement === 'エラー' ? 'campaign-bulk-row-error' : row.judgement === 'スキップ' ? 'campaign-bulk-row-skip' : ''}">
+              <td>${Number(row.row_number).toLocaleString('ja-JP')}</td>
+              <td>${escapeHtml(row.campaign_name || '-')}</td>
+              <td>${escapeHtml(row.media || '-')}</td>
+              <td>${escapeHtml(row.ad_code || '-')}</td>
+              <td>${escapeHtml((row.site_names && row.site_names.length > 0 ? row.site_names.join('、') : row.sites) || '-')}</td>
+              <td>${escapeHtml(row.status || '有効')}</td>
+              <td>${renderCampaignBulkBadge(row.judgement)}</td>
+              <td>${escapeHtml((row.errors || []).join(' / ') || '-')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `
+}
+
+function renderBulkSummaryItem(label, value) {
+  const displayValue = typeof value === 'number' ? value.toLocaleString('ja-JP') : escapeHtml(value)
+  return `
+    <div class="campaign-bulk-summary-item">
+      <span>${escapeHtml(label)}</span>
+      <strong>${displayValue}</strong>
+    </div>
+  `
+}
+
+function renderCampaignBulkBadge(judgement) {
+  const className = judgement === 'エラー'
+    ? 'badge-inactive'
+    : judgement === 'スキップ'
+      ? 'badge-paused'
+      : 'badge-active'
+  return `<span class="badge ${className}">${escapeHtml(judgement)}</span>`
+}
+
+function hasCampaignBulkResultRows(data) {
+  return data.rows.some((row) => row.judgement === 'エラー' || row.judgement === 'スキップ')
+}
+
+function downloadCampaignBulkResultCsv(rows, fileName) {
+  const targetRows = rows.filter((row) => row.judgement === 'エラー' || row.judgement === 'スキップ')
+  const csvRows = [
+    ['行番号', 'キャンペーン名', '媒体', '広告コード', 'サイト', '状態', '判定', 'エラー/理由'],
+    ...targetRows.map((row) => [
+      row.row_number,
+      row.campaign_name,
+      row.media,
+      row.ad_code,
+      row.sites,
+      row.status,
+      row.judgement,
+      (row.errors || []).join(' / '),
+    ]),
+  ]
+  const csv = `\uFEFF${csvRows.map((row) => row.map(makeClientCsvValue).join(',')).join('\r\n')}\r\n`
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  const baseName = (fileName || 'campaign_bulk_import').replace(/\.[^.]+$/, '')
+  link.href = url
+  link.download = `${baseName}_errors.csv`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+function makeClientCsvValue(value) {
+  let text = String(value ?? '')
+  if (/^[=+\-@]/.test(text)) text = `'${text}`
+  const escaped = text.replace(/"/g, '""')
+  return /[",\r\n]/.test(escaped) ? `"${escaped}"` : escaped
 }
 
 // ============================================================
@@ -835,7 +1223,7 @@ async function openCampaignGroupModal(root, group, mediaList) {
   renderPicker()
 }
 // ============================================================
-// 蜈ｱ騾壹Θ繝ｼ繝・ぅ繝ｪ繝・ぅ
+// 共通ユーティリティ
 // ============================================================
 
 /** GET一覧取得の共通ラッパー */
