@@ -144,6 +144,29 @@ const MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
   },
 }
 
+const INTERNAL_MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
+  date: {
+    label: '日付',
+    aliases: ['日付', '日付け', 'Date', '年月日', '対象日', '集計日', '発生日', '成果日', 'クリック日'],
+  },
+  adCode: {
+    label: '広告コード',
+    aliases: ['広告コード', '広告CD', '広告コード名', 'Ad Code', 'ad_code', 'Campaign ID', 'campaign_id'],
+  },
+  accessCount: {
+    label: 'LPクリック',
+    aliases: ['LPクリック', 'LPクリック数', 'lp_click', 'lp_clicks', 'LP Click', 'LP Clicks'],
+  },
+  registrationCount: {
+    label: '本登録',
+    aliases: ['本登録', '本登録数', '本登録者数', '登録完了', '登録完了数', 'Registration', 'registration'],
+  },
+  provisionalRegistrationCount: {
+    label: '仮登録',
+    aliases: ['仮登録', '仮登録数', '仮登録者数', '仮会員登録', '仮会員登録数', 'Provisional Registration', 'provisional_registration'],
+  },
+}
+
 const PAYMENT_REPORT_HEADERS: Record<string, HeaderDefinition> = {
   siteName: { label: 'サイト', aliases: ['サイト', 'site', 'Site', 'site_name'] },
   customerId: { label: '顧客ID', aliases: ['顧客ID', '顧客Id', '顧客id', 'customer_id', 'Customer ID'] },
@@ -155,6 +178,18 @@ const PAYMENT_REPORT_HEADERS: Record<string, HeaderDefinition> = {
   paymentCount: { label: '入金回数', aliases: ['入金回数', '課金回数', '決済回数', 'payment_count', 'Payment Count'] },
   paymentAmount: { label: '入金額', aliases: ['入金額', '売上', '売上金額', '課金額', '決済金額', 'payment_amount', 'Payment Amount'] },
   mediaType: { label: '媒体種別', aliases: ['媒体種別', '媒体タイプ', 'media_type', 'Media Type'] },
+}
+
+const INTERNAL_PAYMENT_REPORT_HEADERS: Record<string, HeaderDefinition> = {
+  siteName: { label: 'サイト', aliases: ['サイト', 'サイト名', 'site', 'site_name'] },
+  customerId: { label: '会員ID', aliases: ['会員ID', '会員Id', '会員id', '顧客ID', 'customer_id', 'member_id', 'user_id'] },
+  adCode: { label: '広告コード', aliases: ['広告コード', '広告CD', '広告コード名', 'ad_code', 'Ad Code'] },
+  registrationStatus: { label: '登録状態', aliases: ['登録状態', '会員状態', 'ステータス', 'status', 'registration_status'] },
+  registrationAt: { label: '登録日時', aliases: ['登録日時', '登録日', '登録日付', '入会日時', '入会日', 'registration_at', 'registered_at'] },
+  firstPaymentAt: { label: '初回購入日時', aliases: ['初回購入日時', '初回入金日時', '初回課金日時', '初回決済日時', 'first_payment_at'] },
+  paymentCount: { label: '入金回数', aliases: ['期間内入金回数', '期間内決済回数', '入金回数', '課金回数', '決済回数', 'payment_count'] },
+  paymentAmount: { label: '期間内金額', aliases: ['期間内金額', '期間内入金額', '期間内売上', '入金額', '売上', '売上金額', '課金額', '決済金額', 'payment_amount'] },
+  mediaType: { label: '媒体種別', aliases: ['媒体種別', '媒体タイプ', '流入元', 'media_type'] },
 }
 
 function parseCsvText(text: string): CsvRows {
@@ -299,6 +334,189 @@ function ensureHeaders(headerIndex: Map<string, number>, definitions: HeaderDefi
   if (missingHeaders.length > 0) {
     throw new Error(`ファイルに必要な列がありません: ${missingHeaders.join(', ')}`)
   }
+}
+
+function hasAllHeaders(headerIndex: Map<string, number>, definitions: HeaderDefinition[]) {
+  return definitions.every((definition) => hasHeader(headerIndex, definition.aliases))
+}
+
+function detectMediaSummaryParser(fileName: string, headerIndex: Map<string, number>) {
+  const normalizedFileName = fileName.toLowerCase()
+  const isInternalByFileName = normalizedFileName.includes('log-advertising')
+  const isInternalByHeaders = hasAllHeaders(headerIndex, [
+    INTERNAL_MEDIA_SUMMARY_HEADERS.accessCount,
+    INTERNAL_MEDIA_SUMMARY_HEADERS.registrationCount,
+  ])
+
+  return isInternalByFileName || isInternalByHeaders ? 'internal' : 'yns'
+}
+
+function detectPaymentReportParser(fileName: string, headerIndex: Map<string, number>) {
+  const normalizedFileName = fileName.toLowerCase()
+  const isInternalByFileName = normalizedFileName.includes('rankinglog')
+  const isInternalByHeaders = hasAllHeaders(headerIndex, [
+    INTERNAL_PAYMENT_REPORT_HEADERS.customerId,
+    INTERNAL_PAYMENT_REPORT_HEADERS.adCode,
+    INTERNAL_PAYMENT_REPORT_HEADERS.paymentAmount,
+  ])
+
+  return isInternalByFileName || isInternalByHeaders ? 'internal' : 'yns'
+}
+
+type ParsedMediaSummaryRow = Omit<MediaSummaryDailyRow, 'mediaId'>
+type ParsedPaymentReportRow = Omit<PaymentReportDailyRow, 'mediaId'>
+
+const MediaSummaryParser = {
+  ynsParser(headerIndex: Map<string, number>, bodyRows: CsvRows, uploadHistoryId: number): ParsedMediaSummaryRow[] {
+    ensureHeaders(headerIndex, [
+      MEDIA_SUMMARY_HEADERS.date,
+      MEDIA_SUMMARY_HEADERS.adCode,
+      MEDIA_SUMMARY_HEADERS.accessCount,
+      MEDIA_SUMMARY_HEADERS.registrationCount,
+      MEDIA_SUMMARY_HEADERS.provisionalRegistrationCount,
+    ])
+
+    return bodyRows.filter((row) => !isBlankRow(row)).map((row, index) => {
+      const targetDate = parseTargetDate(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.date.aliases))
+      if (!targetDate) {
+        throw new Error(`${index + 2}行目の日付が正しくありません`)
+      }
+
+      const adCode = getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.adCode.aliases)
+      if (!adCode) {
+        throw new Error(`${index + 2}行目の広告コードが空です`)
+      }
+
+      return {
+        targetDate,
+        adCode,
+        accessCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.accessCount.aliases)),
+        registrationCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.registrationCount.aliases)),
+        provisionalRegistrationCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.provisionalRegistrationCount.aliases)),
+        uploadHistoryId,
+      }
+    })
+  },
+
+  internalParser(headerIndex: Map<string, number>, bodyRows: CsvRows, uploadHistoryId: number): ParsedMediaSummaryRow[] {
+    ensureHeaders(headerIndex, [
+      INTERNAL_MEDIA_SUMMARY_HEADERS.date,
+      INTERNAL_MEDIA_SUMMARY_HEADERS.adCode,
+      INTERNAL_MEDIA_SUMMARY_HEADERS.accessCount,
+      INTERNAL_MEDIA_SUMMARY_HEADERS.registrationCount,
+    ])
+
+    return bodyRows.filter((row) => !isBlankRow(row)).map((row, index) => {
+      const targetDate = parseTargetDate(getCellByAliases(row, headerIndex, INTERNAL_MEDIA_SUMMARY_HEADERS.date.aliases))
+      if (!targetDate) {
+        throw new Error(`${index + 2}行目の日付が正しくありません`)
+      }
+
+      const adCode = getCellByAliases(row, headerIndex, INTERNAL_MEDIA_SUMMARY_HEADERS.adCode.aliases)
+      if (!adCode) {
+        throw new Error(`${index + 2}行目の広告コードが空です`)
+      }
+
+      return {
+        targetDate,
+        adCode,
+        accessCount: parseInteger(getCellByAliases(row, headerIndex, INTERNAL_MEDIA_SUMMARY_HEADERS.accessCount.aliases)),
+        registrationCount: parseInteger(getCellByAliases(row, headerIndex, INTERNAL_MEDIA_SUMMARY_HEADERS.registrationCount.aliases)),
+        provisionalRegistrationCount: parseInteger(getCellByAliases(row, headerIndex, INTERNAL_MEDIA_SUMMARY_HEADERS.provisionalRegistrationCount.aliases)),
+        uploadHistoryId,
+      }
+    })
+  },
+}
+
+const PaymentReportParser = {
+  ynsParser(headerIndex: Map<string, number>, bodyRows: CsvRows, uploadHistoryId: number): ParsedPaymentReportRow[] {
+    ensureHeaders(headerIndex, [
+      PAYMENT_REPORT_HEADERS.siteName,
+      PAYMENT_REPORT_HEADERS.customerId,
+      PAYMENT_REPORT_HEADERS.adCode,
+      PAYMENT_REPORT_HEADERS.registrationStatus,
+      PAYMENT_REPORT_HEADERS.registrationAt,
+      PAYMENT_REPORT_HEADERS.firstPaymentAt,
+      PAYMENT_REPORT_HEADERS.paymentCount,
+      PAYMENT_REPORT_HEADERS.paymentAmount,
+      PAYMENT_REPORT_HEADERS.mediaType,
+    ])
+
+    return bodyRows.filter((row) => !isBlankRow(row)).map((row, index) => {
+      const registrationAt = getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.registrationAt.aliases)
+      const registrationDate = parseTargetDate(registrationAt)
+      if (!registrationDate) {
+        throw new Error(`${index + 2}行目の登録日時が正しくありません`)
+      }
+
+      const adCode = getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.adCode.aliases)
+      if (!adCode) {
+        throw new Error(`${index + 2}行目の広告コードが空です`)
+      }
+
+      const customerId = getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.customerId.aliases)
+      if (!customerId) {
+        throw new Error(`${index + 2}行目の顧客IDが空です`)
+      }
+
+      return {
+        registrationDate,
+        siteName: getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.siteName.aliases),
+        customerId,
+        adCode,
+        registrationStatus: getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.registrationStatus.aliases),
+        firstPaymentAt: normalizeDateTime(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.firstPaymentAt.aliases)),
+        paymentCount: parseInteger(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.paymentCount.aliases)),
+        paymentAmount: parseMoney(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.paymentAmount.aliases)),
+        mediaType: getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.mediaType.aliases),
+        uploadHistoryId,
+      }
+    })
+  },
+
+  internalParser(headerIndex: Map<string, number>, bodyRows: CsvRows, uploadHistoryId: number): ParsedPaymentReportRow[] {
+    ensureHeaders(headerIndex, [
+      INTERNAL_PAYMENT_REPORT_HEADERS.customerId,
+      INTERNAL_PAYMENT_REPORT_HEADERS.adCode,
+      INTERNAL_PAYMENT_REPORT_HEADERS.registrationAt,
+      INTERNAL_PAYMENT_REPORT_HEADERS.paymentAmount,
+    ])
+
+    return bodyRows.filter((row) => !isBlankRow(row)).map((row, index) => {
+      const registrationAt = getCellByAliases(row, headerIndex, INTERNAL_PAYMENT_REPORT_HEADERS.registrationAt.aliases)
+      const registrationDate = parseTargetDate(registrationAt)
+      if (!registrationDate) {
+        throw new Error(`${index + 2}行目の登録日時が正しくありません`)
+      }
+
+      const adCode = getCellByAliases(row, headerIndex, INTERNAL_PAYMENT_REPORT_HEADERS.adCode.aliases)
+      if (!adCode) {
+        throw new Error(`${index + 2}行目の広告コードが空です`)
+      }
+
+      const customerId = getCellByAliases(row, headerIndex, INTERNAL_PAYMENT_REPORT_HEADERS.customerId.aliases)
+      if (!customerId) {
+        throw new Error(`${index + 2}行目の会員IDが空です`)
+      }
+
+      const paymentAmount = parseMoney(getCellByAliases(row, headerIndex, INTERNAL_PAYMENT_REPORT_HEADERS.paymentAmount.aliases))
+      const rawPaymentCount = getCellByAliases(row, headerIndex, INTERNAL_PAYMENT_REPORT_HEADERS.paymentCount.aliases)
+
+      return {
+        registrationDate,
+        siteName: getCellByAliases(row, headerIndex, INTERNAL_PAYMENT_REPORT_HEADERS.siteName.aliases),
+        customerId,
+        adCode,
+        registrationStatus: getCellByAliases(row, headerIndex, INTERNAL_PAYMENT_REPORT_HEADERS.registrationStatus.aliases),
+        firstPaymentAt: normalizeDateTime(getCellByAliases(row, headerIndex, INTERNAL_PAYMENT_REPORT_HEADERS.firstPaymentAt.aliases)),
+        paymentCount: rawPaymentCount ? parseInteger(rawPaymentCount) : paymentAmount > 0 ? 1 : 0,
+        paymentAmount,
+        mediaType: getCellByAliases(row, headerIndex, INTERNAL_PAYMENT_REPORT_HEADERS.mediaType.aliases),
+        uploadHistoryId,
+      }
+    })
+  },
 }
 
 function normalizeRowCount(rowCount: unknown) {
@@ -772,7 +990,8 @@ async function resolveMediaIdsByAdCode(db: D1Database, adCodes: string[]) {
 async function buildMediaSummaryDailyRows(
   db: D1Database,
   rows: CsvRows,
-  uploadHistoryId: number
+  uploadHistoryId: number,
+  fileName: string
 ) {
   const [headerRow, ...bodyRows] = rows
   if (!headerRow || headerRow.length === 0) {
@@ -780,41 +999,19 @@ async function buildMediaSummaryDailyRows(
   }
 
   const headerIndex = buildHeaderIndex(headerRow)
+  const parserType = detectMediaSummaryParser(fileName, headerIndex)
   logUploadInfo('buildMediaSummaryDailyRows called', {
     csvRows: rows.length,
     bodyRows: countBodyRows(rows),
+    fileName,
+    parserType,
     headers: headerRow,
     normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
   })
 
-  ensureHeaders(headerIndex, [
-    MEDIA_SUMMARY_HEADERS.date,
-    MEDIA_SUMMARY_HEADERS.adCode,
-    MEDIA_SUMMARY_HEADERS.accessCount,
-    MEDIA_SUMMARY_HEADERS.registrationCount,
-    MEDIA_SUMMARY_HEADERS.provisionalRegistrationCount,
-  ])
-
-  const parsedRows = bodyRows.filter((row) => !isBlankRow(row)).map((row, index) => {
-    const targetDate = parseTargetDate(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.date.aliases))
-    if (!targetDate) {
-      throw new Error(`${index + 2}行目の日付が正しくありません`)
-    }
-
-    const adCode = getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.adCode.aliases)
-    if (!adCode) {
-      throw new Error(`${index + 2}行目の広告コードが空です`)
-    }
-
-    return {
-      targetDate,
-      adCode,
-      accessCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.accessCount.aliases)),
-      registrationCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.registrationCount.aliases)),
-      provisionalRegistrationCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.provisionalRegistrationCount.aliases)),
-      uploadHistoryId,
-    }
-  })
+  const parsedRows = parserType === 'internal'
+    ? MediaSummaryParser.internalParser(headerIndex, bodyRows, uploadHistoryId)
+    : MediaSummaryParser.ynsParser(headerIndex, bodyRows, uploadHistoryId)
 
   const mediaIdsByAdCode = await resolveMediaIdsByAdCode(
     db,
@@ -827,6 +1024,7 @@ async function buildMediaSummaryDailyRows(
   }))
 
   logUploadInfo('buildMediaSummaryDailyRows completed', {
+    parserType,
     builtRows: summaryRows.length,
     linkedMediaRows: summaryRows.filter((row) => row.mediaId !== null).length,
     unlinkedMediaRows: summaryRows.filter((row) => row.mediaId === null).length,
@@ -838,7 +1036,8 @@ async function buildMediaSummaryDailyRows(
 async function buildPaymentReportDailyRows(
   db: D1Database,
   rows: CsvRows,
-  uploadHistoryId: number
+  uploadHistoryId: number,
+  fileName: string
 ) {
   const [headerRow, ...bodyRows] = rows
   if (!headerRow || headerRow.length === 0) {
@@ -846,56 +1045,20 @@ async function buildPaymentReportDailyRows(
   }
 
   const headerIndex = buildHeaderIndex(headerRow)
+  const parserType = detectPaymentReportParser(fileName, headerIndex)
   logUploadInfo('buildPaymentReportDailyRows called', {
     csvRows: rows.length,
     bodyRows: countBodyRows(rows),
+    fileName,
+    parserType,
     headers: headerRow,
     normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
     dateBasis: 'registration_date',
   })
 
-  ensureHeaders(headerIndex, [
-    PAYMENT_REPORT_HEADERS.siteName,
-    PAYMENT_REPORT_HEADERS.customerId,
-    PAYMENT_REPORT_HEADERS.adCode,
-    PAYMENT_REPORT_HEADERS.registrationStatus,
-    PAYMENT_REPORT_HEADERS.registrationAt,
-    PAYMENT_REPORT_HEADERS.firstPaymentAt,
-    PAYMENT_REPORT_HEADERS.paymentCount,
-    PAYMENT_REPORT_HEADERS.paymentAmount,
-    PAYMENT_REPORT_HEADERS.mediaType,
-  ])
-
-  const parsedRows = bodyRows.filter((row) => !isBlankRow(row)).map((row, index) => {
-    const registrationAt = getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.registrationAt.aliases)
-    const registrationDate = parseTargetDate(registrationAt)
-    if (!registrationDate) {
-      throw new Error(`${index + 2}行目の登録日時が正しくありません`)
-    }
-
-    const adCode = getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.adCode.aliases)
-    if (!adCode) {
-      throw new Error(`${index + 2}行目の広告コードが空です`)
-    }
-
-    const customerId = getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.customerId.aliases)
-    if (!customerId) {
-      throw new Error(`${index + 2}行目の顧客IDが空です`)
-    }
-
-    return {
-      registrationDate,
-      siteName: getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.siteName.aliases),
-      customerId,
-      adCode,
-      registrationStatus: getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.registrationStatus.aliases),
-      firstPaymentAt: normalizeDateTime(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.firstPaymentAt.aliases)),
-      paymentCount: parseInteger(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.paymentCount.aliases)),
-      paymentAmount: parseMoney(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.paymentAmount.aliases)),
-      mediaType: getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.mediaType.aliases),
-      uploadHistoryId,
-    }
-  })
+  const parsedRows = parserType === 'internal'
+    ? PaymentReportParser.internalParser(headerIndex, bodyRows, uploadHistoryId)
+    : PaymentReportParser.ynsParser(headerIndex, bodyRows, uploadHistoryId)
 
   const mediaIdsByAdCode = await resolveMediaIdsByAdCode(
     db,
@@ -908,6 +1071,7 @@ async function buildPaymentReportDailyRows(
   }))
 
   logUploadInfo('buildPaymentReportDailyRows completed', {
+    parserType,
     builtRows: paymentRows.length,
     linkedMediaRows: paymentRows.filter((row) => row.mediaId !== null).length,
     unlinkedMediaRows: paymentRows.filter((row) => row.mediaId === null).length,
@@ -1266,7 +1430,8 @@ uploadRoute.post('/', async (c) => {
         await buildMediaSummaryDailyRows(
           c.env.DB,
           csvRows,
-          0
+          0,
+          fileName
         )
       )
       mediaSummaryDateRange = getTargetDateRange(preparedMediaSummaryRows)
@@ -1289,7 +1454,8 @@ uploadRoute.post('/', async (c) => {
         await buildPaymentReportDailyRows(
           c.env.DB,
           csvRows,
-          0
+          0,
+          fileName
         )
       )
       paymentReportDateRange = getRegistrationDateRange(preparedPaymentReportRows)
