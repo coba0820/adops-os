@@ -119,6 +119,7 @@ export async function renderDataImportPage(container) {
       id: `upload-${currentTab.key}`,
       fileType: currentTab.key,
       showMediaSelect: currentTab.needsMedia,
+      showDataSourceSelect: currentTab.key === 'site_summary_csv' || currentTab.key === 'payment_report_csv',
       mediaList: activeMediaList,
       onUploadSuccess: () => refreshUploadPanels(container),
     })

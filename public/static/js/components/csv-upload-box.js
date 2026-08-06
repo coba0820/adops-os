@@ -20,6 +20,7 @@ const SUPPORTED_EXTENSIONS = ['csv', 'xlsx']
  * @param {string} options.id DOM要素のユニークID接頭辞
  * @param {string} options.fileType upload_history に記録するタイプ('ad_media_csv'等)
  * @param {boolean} options.showMediaSelect 媒体選択ドロップダウンを表示するか
+ * @param {boolean} [options.showDataSourceSelect] データ元選択ドロップダウンを表示するか
  * @param {Array<{id:number, media_name:string}>} [options.mediaList] 媒体選択肢
  * @param {(payload: object) => void} [options.onUploadSuccess] 履歴登録成功後の通知
  */
@@ -28,6 +29,7 @@ export function mountCsvUploadBox(rootEl, options) {
     id,
     fileType,
     showMediaSelect,
+    showDataSourceSelect = false,
     mediaList = [],
     onUploadSuccess = () => {},
   } = options
@@ -45,8 +47,21 @@ export function mountCsvUploadBox(rootEl, options) {
     `
     : ''
 
+  const dataSourceSelectHtml = showDataSourceSelect
+    ? `
+      <div class="form-row">
+        <label class="form-label" for="${id}-data-source-select">データ元</label>
+        <select id="${id}-data-source-select" class="form-select">
+          <option value="YNS" selected>YNS</option>
+          <option value="INTERNAL">自社システム</option>
+        </select>
+      </div>
+    `
+    : ''
+
   rootEl.innerHTML = `
     ${mediaSelectHtml}
+    ${dataSourceSelectHtml}
     <div class="form-row">
       <label class="form-label">取込ファイル</label>
       <div id="${id}-dropzone" class="upload-dropzone">
@@ -65,6 +80,7 @@ export function mountCsvUploadBox(rootEl, options) {
   const filenameEl = rootEl.querySelector(`#${id}-filename`)
   const previewArea = rootEl.querySelector(`#${id}-preview-area`)
   const mediaSelect = showMediaSelect ? rootEl.querySelector(`#${id}-media-select`) : null
+  const dataSourceSelect = showDataSourceSelect ? rootEl.querySelector(`#${id}-data-source-select`) : null
 
   // クリックでファイル選択ダイアログを開く
   dropzone.addEventListener('click', () => fileInput.click())
@@ -155,6 +171,7 @@ export function mountCsvUploadBox(rootEl, options) {
       await axios.post('/api/upload', {
         file_type: fileType,
         media_id: showMediaSelect && mediaSelect ? Number(mediaSelect.value) : null,
+        data_source: showDataSourceSelect && dataSourceSelect ? dataSourceSelect.value : 'YNS',
         file_name: file.name,
         row_count: rowCount,
         csv_rows: shouldSendCsvRows(fileType) ? rows : undefined,
@@ -171,6 +188,7 @@ export function mountCsvUploadBox(rootEl, options) {
       }
       onUploadSuccess({
         file_type: fileType,
+        data_source: showDataSourceSelect && dataSourceSelect ? dataSourceSelect.value : 'YNS',
         file_name: file.name,
         row_count: rowCount,
       })

@@ -44,6 +44,8 @@ const UPLOAD_DETAIL_TABLES = [
 const INSERT_BATCH_SIZE = 25
 const LOOKUP_BATCH_SIZE = 50
 
+type UploadDataSource = 'YNS' | 'INTERNAL'
+
 type CsvRows = string[][]
 
 type AdMediaDailyRow = {
@@ -66,9 +68,11 @@ type MediaSummaryDailyRow = {
   targetDate: string
   mediaId: number | null
   adCode: string
+  siteName: string
   accessCount: number
   registrationCount: number
   provisionalRegistrationCount: number
+  dataSource: UploadDataSource
   uploadHistoryId: number
 }
 
@@ -83,6 +87,7 @@ type PaymentReportDailyRow = {
   paymentAmount: number
   mediaType: string
   mediaId: number | null
+  dataSource: UploadDataSource
   uploadHistoryId: number
 }
 
@@ -145,6 +150,10 @@ const MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
 }
 
 const INTERNAL_MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
+  siteName: {
+    label: 'サイト名',
+    aliases: ['サイト名', 'サイト', 'site_name', 'site'],
+  },
   date: {
     label: '日付',
     aliases: ['日付', '日付け', 'Date', '年月日', '対象日', '集計日', '発生日', '成果日', 'クリック日'],
@@ -181,11 +190,11 @@ const PAYMENT_REPORT_HEADERS: Record<string, HeaderDefinition> = {
 }
 
 const INTERNAL_PAYMENT_REPORT_HEADERS: Record<string, HeaderDefinition> = {
-  siteName: { label: 'サイト', aliases: ['サイト', 'サイト名', 'site', 'site_name'] },
+  siteName: { label: 'サイト名', aliases: ['サイト名', 'サイト', 'site', 'site_name'] },
   customerId: { label: '会員ID', aliases: ['会員ID', '会員Id', '会員id', '顧客ID', 'customer_id', 'member_id', 'user_id'] },
   adCode: { label: '広告コード', aliases: ['広告コード', '広告CD', '広告コード名', 'ad_code', 'Ad Code'] },
   registrationStatus: { label: '登録状態', aliases: ['登録状態', '会員状態', 'ステータス', 'status', 'registration_status'] },
-  registrationAt: { label: '登録日時', aliases: ['登録日時', '登録日', '登録日付', '入会日時', '入会日', 'registration_at', 'registered_at'] },
+  registrationAt: { label: '本登録日', aliases: ['本登録日', '登録日時', '登録日', '登録日付', '入会日時', '入会日', 'registration_at', 'registered_at'] },
   firstPaymentAt: { label: '初回購入日時', aliases: ['初回購入日時', '初回入金日時', '初回課金日時', '初回決済日時', 'first_payment_at'] },
   paymentCount: { label: '入金回数', aliases: ['期間内入金回数', '期間内決済回数', '入金回数', '課金回数', '決済回数', 'payment_count'] },
   paymentAmount: { label: '期間内金額', aliases: ['期間内金額', '期間内入金額', '期間内売上', '入金額', '売上', '売上金額', '課金額', '決済金額', 'payment_amount'] },
@@ -255,6 +264,12 @@ function parseUploadFileType(fileType: unknown): UploadFileType | null {
     return fileType
   }
   return null
+}
+
+function parseUploadDataSource(value: unknown): UploadDataSource {
+  const normalized = String(value ?? 'YNS').trim().toUpperCase()
+  if (normalized === 'INTERNAL' || normalized === '自社システム') return 'INTERNAL'
+  return 'YNS'
 }
 
 function normalizeHeader(header: unknown) {
@@ -336,38 +351,36 @@ function ensureHeaders(headerIndex: Map<string, number>, definitions: HeaderDefi
   }
 }
 
-function hasAllHeaders(headerIndex: Map<string, number>, definitions: HeaderDefinition[]) {
-  return definitions.every((definition) => hasHeader(headerIndex, definition.aliases))
+function detectMediaSummaryParser(
+  fileName: string,
+  headerIndex: Map<string, number>,
+  dataSource: UploadDataSource
+) {
+  void fileName
+  void headerIndex
+  return dataSource === 'INTERNAL' ? 'internal' : 'yns'
 }
 
-function detectMediaSummaryParser(fileName: string, headerIndex: Map<string, number>) {
-  const normalizedFileName = fileName.toLowerCase()
-  const isInternalByFileName = normalizedFileName.includes('log-advertising')
-  const isInternalByHeaders = hasAllHeaders(headerIndex, [
-    INTERNAL_MEDIA_SUMMARY_HEADERS.accessCount,
-    INTERNAL_MEDIA_SUMMARY_HEADERS.registrationCount,
-  ])
-
-  return isInternalByFileName || isInternalByHeaders ? 'internal' : 'yns'
-}
-
-function detectPaymentReportParser(fileName: string, headerIndex: Map<string, number>) {
-  const normalizedFileName = fileName.toLowerCase()
-  const isInternalByFileName = normalizedFileName.includes('rankinglog')
-  const isInternalByHeaders = hasAllHeaders(headerIndex, [
-    INTERNAL_PAYMENT_REPORT_HEADERS.customerId,
-    INTERNAL_PAYMENT_REPORT_HEADERS.adCode,
-    INTERNAL_PAYMENT_REPORT_HEADERS.paymentAmount,
-  ])
-
-  return isInternalByFileName || isInternalByHeaders ? 'internal' : 'yns'
+function detectPaymentReportParser(
+  fileName: string,
+  headerIndex: Map<string, number>,
+  dataSource: UploadDataSource
+) {
+  void fileName
+  void headerIndex
+  return dataSource === 'INTERNAL' ? 'internal' : 'yns'
 }
 
 type ParsedMediaSummaryRow = Omit<MediaSummaryDailyRow, 'mediaId'>
 type ParsedPaymentReportRow = Omit<PaymentReportDailyRow, 'mediaId'>
 
 const MediaSummaryParser = {
-  ynsParser(headerIndex: Map<string, number>, bodyRows: CsvRows, uploadHistoryId: number): ParsedMediaSummaryRow[] {
+  ynsParser(
+    headerIndex: Map<string, number>,
+    bodyRows: CsvRows,
+    uploadHistoryId: number,
+    dataSource: UploadDataSource
+  ): ParsedMediaSummaryRow[] {
     ensureHeaders(headerIndex, [
       MEDIA_SUMMARY_HEADERS.date,
       MEDIA_SUMMARY_HEADERS.adCode,
@@ -390,16 +403,24 @@ const MediaSummaryParser = {
       return {
         targetDate,
         adCode,
+        siteName: '',
         accessCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.accessCount.aliases)),
         registrationCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.registrationCount.aliases)),
         provisionalRegistrationCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.provisionalRegistrationCount.aliases)),
+        dataSource,
         uploadHistoryId,
       }
     })
   },
 
-  internalParser(headerIndex: Map<string, number>, bodyRows: CsvRows, uploadHistoryId: number): ParsedMediaSummaryRow[] {
+  internalParser(
+    headerIndex: Map<string, number>,
+    bodyRows: CsvRows,
+    uploadHistoryId: number,
+    dataSource: UploadDataSource
+  ): ParsedMediaSummaryRow[] {
     ensureHeaders(headerIndex, [
+      INTERNAL_MEDIA_SUMMARY_HEADERS.siteName,
       INTERNAL_MEDIA_SUMMARY_HEADERS.date,
       INTERNAL_MEDIA_SUMMARY_HEADERS.adCode,
       INTERNAL_MEDIA_SUMMARY_HEADERS.accessCount,
@@ -420,9 +441,11 @@ const MediaSummaryParser = {
       return {
         targetDate,
         adCode,
+        siteName: getCellByAliases(row, headerIndex, INTERNAL_MEDIA_SUMMARY_HEADERS.siteName.aliases),
         accessCount: parseInteger(getCellByAliases(row, headerIndex, INTERNAL_MEDIA_SUMMARY_HEADERS.accessCount.aliases)),
         registrationCount: parseInteger(getCellByAliases(row, headerIndex, INTERNAL_MEDIA_SUMMARY_HEADERS.registrationCount.aliases)),
         provisionalRegistrationCount: parseInteger(getCellByAliases(row, headerIndex, INTERNAL_MEDIA_SUMMARY_HEADERS.provisionalRegistrationCount.aliases)),
+        dataSource,
         uploadHistoryId,
       }
     })
@@ -430,7 +453,12 @@ const MediaSummaryParser = {
 }
 
 const PaymentReportParser = {
-  ynsParser(headerIndex: Map<string, number>, bodyRows: CsvRows, uploadHistoryId: number): ParsedPaymentReportRow[] {
+  ynsParser(
+    headerIndex: Map<string, number>,
+    bodyRows: CsvRows,
+    uploadHistoryId: number,
+    dataSource: UploadDataSource
+  ): ParsedPaymentReportRow[] {
     ensureHeaders(headerIndex, [
       PAYMENT_REPORT_HEADERS.siteName,
       PAYMENT_REPORT_HEADERS.customerId,
@@ -470,13 +498,20 @@ const PaymentReportParser = {
         paymentCount: parseInteger(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.paymentCount.aliases)),
         paymentAmount: parseMoney(getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.paymentAmount.aliases)),
         mediaType: getCellByAliases(row, headerIndex, PAYMENT_REPORT_HEADERS.mediaType.aliases),
+        dataSource,
         uploadHistoryId,
       }
     })
   },
 
-  internalParser(headerIndex: Map<string, number>, bodyRows: CsvRows, uploadHistoryId: number): ParsedPaymentReportRow[] {
+  internalParser(
+    headerIndex: Map<string, number>,
+    bodyRows: CsvRows,
+    uploadHistoryId: number,
+    dataSource: UploadDataSource
+  ): ParsedPaymentReportRow[] {
     ensureHeaders(headerIndex, [
+      INTERNAL_PAYMENT_REPORT_HEADERS.siteName,
       INTERNAL_PAYMENT_REPORT_HEADERS.customerId,
       INTERNAL_PAYMENT_REPORT_HEADERS.adCode,
       INTERNAL_PAYMENT_REPORT_HEADERS.registrationAt,
@@ -513,6 +548,7 @@ const PaymentReportParser = {
         paymentCount: rawPaymentCount ? parseInteger(rawPaymentCount) : paymentAmount > 0 ? 1 : 0,
         paymentAmount,
         mediaType: getCellByAliases(row, headerIndex, INTERNAL_PAYMENT_REPORT_HEADERS.mediaType.aliases),
+        dataSource,
         uploadHistoryId,
       }
     })
@@ -674,6 +710,7 @@ function aggregateMediaSummaryRows(rows: MediaSummaryDailyRow[]) {
       row.targetDate,
       row.mediaId ?? 'null',
       row.adCode || '',
+      row.dataSource,
     ].join('|')
     const current = rowsByKey.get(key)
 
@@ -685,6 +722,7 @@ function aggregateMediaSummaryRows(rows: MediaSummaryDailyRow[]) {
     current.accessCount += row.accessCount
     current.registrationCount += row.registrationCount
     current.provisionalRegistrationCount += row.provisionalRegistrationCount
+    current.siteName = row.siteName || current.siteName
   }
 
   return [...rowsByKey.values()]
@@ -699,6 +737,7 @@ function aggregatePaymentReportRows(rows: PaymentReportDailyRow[]) {
       row.mediaId ?? 'null',
       row.adCode || '',
       row.customerId || '',
+      row.dataSource,
     ].join('|')
     const current = rowsByKey.get(key)
 
@@ -770,19 +809,23 @@ async function deleteOldMediaSummaryRowsInRange(
   uploadHistoryId: number
 ) {
   const mediaIds = uniqueNumbers(rows.map((row) => row.mediaId))
+  const dataSources = [...new Set(rows.map((row) => row.dataSource))]
   for (let i = 0; i < mediaIds.length; i += LOOKUP_BATCH_SIZE) {
     const chunk = mediaIds.slice(i, i + LOOKUP_BATCH_SIZE)
     if (chunk.length === 0) continue
 
     const placeholders = chunk.map(() => '?').join(', ')
-    await db.prepare(
-      `DELETE FROM media_summary_daily
-       WHERE target_date BETWEEN ? AND ?
-         AND media_id IN (${placeholders})
-         AND upload_history_id <> ?`
-    )
-      .bind(range.minDate, range.maxDate, ...chunk, uploadHistoryId)
-      .run()
+    for (const dataSource of dataSources) {
+      await db.prepare(
+        `DELETE FROM media_summary_daily
+         WHERE target_date BETWEEN ? AND ?
+           AND media_id IN (${placeholders})
+           AND data_source = ?
+           AND upload_history_id <> ?`
+      )
+        .bind(range.minDate, range.maxDate, ...chunk, dataSource, uploadHistoryId)
+        .run()
+    }
   }
 
   const unlinkedAdCodes = uniqueStrings(
@@ -795,15 +838,18 @@ async function deleteOldMediaSummaryRowsInRange(
     if (chunk.length === 0) continue
 
     const placeholders = chunk.map(() => '?').join(', ')
-    await db.prepare(
-      `DELETE FROM media_summary_daily
-       WHERE target_date BETWEEN ? AND ?
-         AND media_id IS NULL
-         AND ad_code IN (${placeholders})
-         AND upload_history_id <> ?`
-    )
-      .bind(range.minDate, range.maxDate, ...chunk, uploadHistoryId)
-      .run()
+    for (const dataSource of dataSources) {
+      await db.prepare(
+        `DELETE FROM media_summary_daily
+         WHERE target_date BETWEEN ? AND ?
+           AND media_id IS NULL
+           AND ad_code IN (${placeholders})
+           AND data_source = ?
+           AND upload_history_id <> ?`
+      )
+        .bind(range.minDate, range.maxDate, ...chunk, dataSource, uploadHistoryId)
+        .run()
+    }
   }
 }
 
@@ -832,20 +878,24 @@ async function deleteOldPaymentReportRowsInRange(
   let deletedLinkedMediaRows = 0
   let deletedNullMediaRows = 0
   const mediaIds = uniqueNumbers(rows.map((row) => row.mediaId))
+  const dataSources = [...new Set(rows.map((row) => row.dataSource))]
   for (let i = 0; i < mediaIds.length; i += LOOKUP_BATCH_SIZE) {
     const chunk = mediaIds.slice(i, i + LOOKUP_BATCH_SIZE)
     if (chunk.length === 0) continue
 
     const placeholders = chunk.map(() => '?').join(', ')
-    const result = await db.prepare(
-      `DELETE FROM payment_report_daily
-       WHERE registration_date BETWEEN ? AND ?
-         AND media_id IN (${placeholders})
-         AND upload_history_id <> ?`
-    )
-      .bind(range.minDate, range.maxDate, ...chunk, uploadHistoryId)
-      .run()
-    deletedLinkedMediaRows += Number(result.meta?.changes ?? 0)
+    for (const dataSource of dataSources) {
+      const result = await db.prepare(
+        `DELETE FROM payment_report_daily
+         WHERE registration_date BETWEEN ? AND ?
+           AND media_id IN (${placeholders})
+           AND data_source = ?
+           AND upload_history_id <> ?`
+      )
+        .bind(range.minDate, range.maxDate, ...chunk, dataSource, uploadHistoryId)
+        .run()
+      deletedLinkedMediaRows += Number(result.meta?.changes ?? 0)
+    }
   }
 
   const targetAdCodes = uniqueStrings(rows.map((row) => row.adCode))
@@ -854,16 +904,19 @@ async function deleteOldPaymentReportRowsInRange(
     if (chunk.length === 0) continue
 
     const placeholders = chunk.map(() => '?').join(', ')
-    const result = await db.prepare(
-      `DELETE FROM payment_report_daily
-       WHERE registration_date BETWEEN ? AND ?
-         AND media_id IS NULL
-         AND ad_code IN (${placeholders})
-         AND upload_history_id <> ?`
-    )
-      .bind(range.minDate, range.maxDate, ...chunk, uploadHistoryId)
-      .run()
-    deletedNullMediaRows += Number(result.meta?.changes ?? 0)
+    for (const dataSource of dataSources) {
+      const result = await db.prepare(
+        `DELETE FROM payment_report_daily
+         WHERE registration_date BETWEEN ? AND ?
+           AND media_id IS NULL
+           AND ad_code IN (${placeholders})
+           AND data_source = ?
+           AND upload_history_id <> ?`
+      )
+        .bind(range.minDate, range.maxDate, ...chunk, dataSource, uploadHistoryId)
+        .run()
+      deletedNullMediaRows += Number(result.meta?.changes ?? 0)
+    }
   }
 
   return {
@@ -991,7 +1044,8 @@ async function buildMediaSummaryDailyRows(
   db: D1Database,
   rows: CsvRows,
   uploadHistoryId: number,
-  fileName: string
+  fileName: string,
+  dataSource: UploadDataSource
 ) {
   const [headerRow, ...bodyRows] = rows
   if (!headerRow || headerRow.length === 0) {
@@ -999,19 +1053,20 @@ async function buildMediaSummaryDailyRows(
   }
 
   const headerIndex = buildHeaderIndex(headerRow)
-  const parserType = detectMediaSummaryParser(fileName, headerIndex)
+  const parserType = detectMediaSummaryParser(fileName, headerIndex, dataSource)
   logUploadInfo('buildMediaSummaryDailyRows called', {
     csvRows: rows.length,
     bodyRows: countBodyRows(rows),
     fileName,
+    dataSource,
     parserType,
     headers: headerRow,
     normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
   })
 
   const parsedRows = parserType === 'internal'
-    ? MediaSummaryParser.internalParser(headerIndex, bodyRows, uploadHistoryId)
-    : MediaSummaryParser.ynsParser(headerIndex, bodyRows, uploadHistoryId)
+    ? MediaSummaryParser.internalParser(headerIndex, bodyRows, uploadHistoryId, dataSource)
+    : MediaSummaryParser.ynsParser(headerIndex, bodyRows, uploadHistoryId, dataSource)
 
   const mediaIdsByAdCode = await resolveMediaIdsByAdCode(
     db,
@@ -1037,7 +1092,8 @@ async function buildPaymentReportDailyRows(
   db: D1Database,
   rows: CsvRows,
   uploadHistoryId: number,
-  fileName: string
+  fileName: string,
+  dataSource: UploadDataSource
 ) {
   const [headerRow, ...bodyRows] = rows
   if (!headerRow || headerRow.length === 0) {
@@ -1045,11 +1101,12 @@ async function buildPaymentReportDailyRows(
   }
 
   const headerIndex = buildHeaderIndex(headerRow)
-  const parserType = detectPaymentReportParser(fileName, headerIndex)
+  const parserType = detectPaymentReportParser(fileName, headerIndex, dataSource)
   logUploadInfo('buildPaymentReportDailyRows called', {
     csvRows: rows.length,
     bodyRows: countBodyRows(rows),
     fileName,
+    dataSource,
     parserType,
     headers: headerRow,
     normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
@@ -1057,8 +1114,8 @@ async function buildPaymentReportDailyRows(
   })
 
   const parsedRows = parserType === 'internal'
-    ? PaymentReportParser.internalParser(headerIndex, bodyRows, uploadHistoryId)
-    : PaymentReportParser.ynsParser(headerIndex, bodyRows, uploadHistoryId)
+    ? PaymentReportParser.internalParser(headerIndex, bodyRows, uploadHistoryId, dataSource)
+    : PaymentReportParser.ynsParser(headerIndex, bodyRows, uploadHistoryId, dataSource)
 
   const mediaIdsByAdCode = await resolveMediaIdsByAdCode(
     db,
@@ -1286,6 +1343,8 @@ uploadRoute.post('/', async (c) => {
     media_id?: number | null
     file_name: string
     row_count: number
+    data_source?: string
+    dataSource?: string
     csv_rows?: CsvRows
     csv_text?: string
   }>()
@@ -1293,6 +1352,7 @@ uploadRoute.post('/', async (c) => {
   const fileType = parseUploadFileType(body.file_type)
   const fileName = typeof body.file_name === 'string' ? body.file_name.trim() : ''
   const rowCount = normalizeRowCount(body.row_count)
+  const dataSource = parseUploadDataSource(body.data_source ?? body.dataSource)
 
   if (!fileType || !fileName) {
     return c.json<ApiResponse<null>>(
@@ -1353,6 +1413,7 @@ uploadRoute.post('/', async (c) => {
     logUploadInfo('CSV detail payload received', {
       fileType,
       fileName,
+      dataSource,
       rowCount,
       csvRows: csvRows.length,
       bodyRows: countBodyRows(csvRows),
@@ -1431,7 +1492,8 @@ uploadRoute.post('/', async (c) => {
           c.env.DB,
           csvRows,
           0,
-          fileName
+          fileName,
+          dataSource
         )
       )
       mediaSummaryDateRange = getTargetDateRange(preparedMediaSummaryRows)
@@ -1455,7 +1517,8 @@ uploadRoute.post('/', async (c) => {
           c.env.DB,
           csvRows,
           0,
-          fileName
+          fileName,
+          dataSource
         )
       )
       paymentReportDateRange = getRegistrationDateRange(preparedPaymentReportRows)
@@ -1597,6 +1660,7 @@ uploadRoute.post('/', async (c) => {
       logUploadInfo('media_summary_daily insert target rows', {
         uploadHistoryId,
         savedRows,
+        dataSource,
         linkedMediaRows: preparedMediaSummaryRows.filter((row) => row.mediaId !== null).length,
         unlinkedMediaRows: preparedMediaSummaryRows.filter((row) => row.mediaId === null).length,
       })
@@ -1611,17 +1675,19 @@ uploadRoute.post('/', async (c) => {
           chunk.map((row) =>
             c.env.DB.prepare(
               `INSERT OR REPLACE INTO media_summary_daily
-                 (target_date, media_id, ad_code, access_count,
+                 (target_date, media_id, ad_code, site_name, access_count,
                   registration_count, provisional_registration_count,
-                  upload_history_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`
+                  data_source, upload_history_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
             ).bind(
               row.targetDate,
               row.mediaId,
               row.adCode,
+              row.siteName,
               row.accessCount,
               row.registrationCount,
               row.provisionalRegistrationCount,
+              row.dataSource,
               uploadHistoryId
             )
           )
@@ -1658,6 +1724,7 @@ uploadRoute.post('/', async (c) => {
       logUploadInfo('payment_report_daily insert target rows', {
         uploadHistoryId,
         savedRows,
+        dataSource,
         linkedMediaRows: preparedPaymentReportRows.filter((row) => row.mediaId !== null).length,
         unlinkedMediaRows: preparedPaymentReportRows.filter((row) => row.mediaId === null).length,
         dateBasis: 'registration_date',
@@ -1693,8 +1760,8 @@ uploadRoute.post('/', async (c) => {
               `INSERT OR REPLACE INTO payment_report_daily
                  (registration_date, site_name, customer_id, ad_code,
                   registration_status, first_payment_at, payment_count,
-                  payment_amount, media_type, media_id, upload_history_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                  payment_amount, media_type, media_id, data_source, upload_history_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             ).bind(
               row.registrationDate,
               row.siteName,
@@ -1706,6 +1773,7 @@ uploadRoute.post('/', async (c) => {
               row.paymentAmount,
               row.mediaType,
               row.mediaId,
+              row.dataSource,
               uploadHistoryId
             )
           )
