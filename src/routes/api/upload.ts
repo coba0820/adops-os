@@ -160,7 +160,7 @@ const INTERNAL_MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
   },
   adCode: {
     label: '広告コード',
-    aliases: ['広告コード', '広告CD', '広告コード名', 'Ad Code', 'ad_code', 'Campaign ID', 'campaign_id'],
+    aliases: ['広告コード', 'コード', '広告CD', '広告コード名', 'Ad Code', 'ad_code', 'Campaign ID', 'campaign_id'],
   },
   accessCount: {
     label: 'LPクリック',
@@ -420,7 +420,6 @@ const MediaSummaryParser = {
     dataSource: UploadDataSource
   ): ParsedMediaSummaryRow[] {
     ensureHeaders(headerIndex, [
-      INTERNAL_MEDIA_SUMMARY_HEADERS.siteName,
       INTERNAL_MEDIA_SUMMARY_HEADERS.date,
       INTERNAL_MEDIA_SUMMARY_HEADERS.adCode,
       INTERNAL_MEDIA_SUMMARY_HEADERS.accessCount,
@@ -511,7 +510,6 @@ const PaymentReportParser = {
     dataSource: UploadDataSource
   ): ParsedPaymentReportRow[] {
     ensureHeaders(headerIndex, [
-      INTERNAL_PAYMENT_REPORT_HEADERS.siteName,
       INTERNAL_PAYMENT_REPORT_HEADERS.customerId,
       INTERNAL_PAYMENT_REPORT_HEADERS.adCode,
       INTERNAL_PAYMENT_REPORT_HEADERS.registrationAt,

@@ -5,7 +5,7 @@
 // v1では「アップロード＋プレビュー表示」のみが目的で、
 // 広告媒体CSVは日次実績も保存し、それ以外は履歴だけAPIに記録する。
 // ============================================================
-import { parseCsv } from './csv-parser.js'
+import { decodeCsvFile, parseCsv } from './csv-parser.js'
 import { parseXlsxFile } from './xlsx-parser.js'
 import { showToast } from './toast.js'
 
@@ -164,6 +164,7 @@ export function mountCsvUploadBox(rootEl, options) {
       renderPreview(previewArea, rows, {
         fileFormat,
         sheetName,
+        encoding: parsed.encoding,
       })
 
       const rowCount = countBodyRows(rows)
@@ -225,6 +226,7 @@ function renderPreview(previewArea, rows, meta = {}) {
       <div class="form-hint">
         <i class="fa-solid fa-circle-info"></i>
         認識したヘッダー: ${header.length}列 / 総行数: ${nonBlankBody.length}件 / 先頭${displayRows.length}件を表示
+        ${meta.encoding ? ` / 文字コード: ${escapeHtml(meta.encoding)}` : ''}
         ${meta.fileFormat === 'xlsx' && meta.sheetName ? ` / シート: ${escapeHtml(meta.sheetName)}` : ''}
       </div>
       <div class="form-hint">先頭行: ${escapeHtml(firstRow.slice(0, 6).join(' / ') || '-')}</div>
@@ -240,10 +242,10 @@ function renderPreview(previewArea, rows, meta = {}) {
 
 async function parseFile(file, fileFormat) {
   if (fileFormat === 'csv') {
-    const text = await readFileAsText(file)
+    const { text, encoding } = await decodeCsvFile(file)
     const rows = parseCsv(text)
     if (rows.length === 0) throw new Error('CSVにデータがありません。')
-    return { rows, text, sheetName: null }
+    return { rows, text, sheetName: null, encoding }
   }
 
   if (fileFormat === 'xlsx') {
@@ -251,15 +253,6 @@ async function parseFile(file, fileFormat) {
   }
 
   throw new Error('未対応のファイル形式です。')
-}
-
-function readFileAsText(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = (event) => resolve(String(event.target.result || ''))
-    reader.onerror = () => reject(new Error('CSVファイルの読み込みに失敗しました。'))
-    reader.readAsText(file, 'UTF-8')
-  })
 }
 
 function getFileFormat(fileName) {
