@@ -19,7 +19,7 @@ function ensureContainer() {
 /**
  * トーストを表示する
  * @param {string} message 表示するメッセージ
- * @param {'success'|'error'} type トーストの種類
+ * @param {'success'|'error'|'warning'} type トーストの種類
  */
 export function showToast(message, type = 'success') {
   const container = ensureContainer()

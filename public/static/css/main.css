@@ -1794,6 +1794,39 @@ button {
 
 .toast.success { background: var(--color-success); }
 .toast.error { background: var(--color-danger); }
+.toast.warning { background: #d97706; }
+
+.upload-warning-box {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  border-radius: var(--radius-md);
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.upload-warning-box strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #92400e;
+}
+
+.upload-warning-codes {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.upload-warning-code {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(217, 119, 6, 0.12);
+  color: #92400e;
+  font-weight: 700;
+}
 
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px); }

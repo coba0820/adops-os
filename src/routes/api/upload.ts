@@ -101,6 +101,13 @@ type TargetDateRange = {
   maxDate: string
 }
 
+type UploadWarning = {
+  type: 'unregistered_ad_codes'
+  message: string
+  count: number
+  ad_codes: string[]
+}
+
 const AD_MEDIA_HEADERS: Record<string, HeaderDefinition> = {
   date: { label: 'Date', aliases: ['Date', '日付', '年月日'] },
   accountName: { label: 'Account Name', aliases: ['Account Name', 'アカウント名'] },
@@ -1456,6 +1463,7 @@ uploadRoute.post('/', async (c) => {
   let adMediaDateRange: TargetDateRange | null = null
   let mediaSummaryDateRange: TargetDateRange | null = null
   let paymentReportDateRange: TargetDateRange | null = null
+  const uploadWarnings: UploadWarning[] = []
   const exchangeRates = fileType === 'ad_media_csv'
     ? await fetchExchangeRates(c.env.DB)
     : {}
@@ -1510,7 +1518,7 @@ uploadRoute.post('/', async (c) => {
     }
 
     if (fileType === 'payment_report_csv') {
-      preparedPaymentReportRows = aggregatePaymentReportRows(
+      const allPaymentReportRows = aggregatePaymentReportRows(
         await buildPaymentReportDailyRows(
           c.env.DB,
           csvRows,
@@ -1519,32 +1527,49 @@ uploadRoute.post('/', async (c) => {
           dataSource
         )
       )
-      paymentReportDateRange = getRegistrationDateRange(preparedPaymentReportRows)
 
-      logUploadInfo('payment_report_daily prepared rows', {
-        preparedRows: preparedPaymentReportRows.length,
-        minTargetDate: paymentReportDateRange.minDate,
-        maxTargetDate: paymentReportDateRange.maxDate,
-        linkedMediaRows: preparedPaymentReportRows.filter((row) => row.mediaId !== null).length,
-        unlinkedMediaRows: preparedPaymentReportRows.filter((row) => row.mediaId === null).length,
-        dateBasis: 'registration_date',
-      })
-
-      if (preparedPaymentReportRows.length === 0) {
+      if (allPaymentReportRows.length === 0) {
         throw new Error('決済レポートCSVに保存対象の明細行がありません')
       }
 
       const unlinkedPaymentAdCodes = uniqueStrings(
-        preparedPaymentReportRows
+        allPaymentReportRows
           .filter((row) => row.mediaId === null)
           .map((row) => row.adCode)
       )
       if (unlinkedPaymentAdCodes.length > 0) {
-        const examples = unlinkedPaymentAdCodes.slice(0, 10).join(', ')
-        const suffix = unlinkedPaymentAdCodes.length > 10 ? ' ほか' : ''
-        throw new Error(
-          `決済レポートに媒体を特定できない広告コードがあります。キャンペーンマスタを確認してください: ${examples}${suffix}`
-        )
+        uploadWarnings.push({
+          type: 'unregistered_ad_codes',
+          message: [
+            'アップロードは完了しました。',
+            `ただし、未登録の広告コードが${unlinkedPaymentAdCodes.length}件ありました。`,
+            '',
+            'これらの広告コードは媒体を特定できないため取り込まれていません。',
+            '広告コードマスタへ登録後、再アップロードしてください。',
+          ].join('\n'),
+          count: unlinkedPaymentAdCodes.length,
+          ad_codes: unlinkedPaymentAdCodes,
+        })
+      }
+
+      preparedPaymentReportRows = allPaymentReportRows.filter((row) => row.mediaId !== null)
+      paymentReportDateRange = preparedPaymentReportRows.length > 0
+        ? getRegistrationDateRange(preparedPaymentReportRows)
+        : null
+
+      logUploadInfo('payment_report_daily prepared rows', {
+        parsedRows: allPaymentReportRows.length,
+        preparedRows: preparedPaymentReportRows.length,
+        minTargetDate: paymentReportDateRange?.minDate ?? null,
+        maxTargetDate: paymentReportDateRange?.maxDate ?? null,
+        linkedMediaRows: preparedPaymentReportRows.length,
+        unlinkedMediaRows: allPaymentReportRows.length - preparedPaymentReportRows.length,
+        unregisteredAdCodes: unlinkedPaymentAdCodes,
+        dateBasis: 'registration_date',
+      })
+
+      if (preparedPaymentReportRows.length === 0 && uploadWarnings.length === 0) {
+        throw new Error('決済レポートCSVに保存対象の明細行がありません')
       }
     }
   } catch (err) {
@@ -1728,7 +1753,7 @@ uploadRoute.post('/', async (c) => {
         dateBasis: 'registration_date',
       })
 
-      if (savedRows === 0) {
+      if (savedRows === 0 && uploadWarnings.length === 0) {
         throw new Error('決済レポートCSVに保存対象の明細行がありません')
       }
 
@@ -1797,8 +1822,8 @@ uploadRoute.post('/', async (c) => {
     )
   }
 
-  return c.json<ApiResponse<{ id: number; saved_rows: number }>>({
+  return c.json<ApiResponse<{ id: number; saved_rows: number; warnings: UploadWarning[] }>>({
     success: true,
-    data: { id: uploadHistoryId, saved_rows: savedRows },
+    data: { id: uploadHistoryId, saved_rows: savedRows, warnings: uploadWarnings },
   })
 })

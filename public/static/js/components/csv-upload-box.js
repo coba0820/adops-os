@@ -169,7 +169,7 @@ export function mountCsvUploadBox(rootEl, options) {
 
       const rowCount = countBodyRows(rows)
 
-      await axios.post('/api/upload', {
+      const uploadRes = await axios.post('/api/upload', {
         file_type: fileType,
         media_id: showMediaSelect && mediaSelect ? Number(mediaSelect.value) : null,
         data_source: showDataSourceSelect && dataSourceSelect ? dataSourceSelect.value : 'YNS',
@@ -178,26 +178,50 @@ export function mountCsvUploadBox(rootEl, options) {
         csv_rows: shouldSendCsvRows(fileType) ? rows : undefined,
         csv_text: shouldSendCsvRows(fileType) && fileFormat === 'csv' ? text : undefined,
       })
+      const warnings = uploadRes.data?.data?.warnings || []
       if (fileType === 'ad_media_csv') {
         showToast(`広告媒体${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
       } else if (fileType === 'site_summary_csv') {
         showToast(`媒体集計${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
       } else if (fileType === 'payment_report_csv') {
-        showToast(`決済レポート${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
+        if (warnings.length > 0) {
+          showToast('決済レポートのアップロードは完了しましたが、未登録の広告コードがあります', 'warning')
+        } else {
+          showToast(`決済レポート${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
+        }
       } else {
         showToast(`「${file.name}」を取込みました（${rowCount}行）`, 'success')
       }
+      renderUploadWarnings(previewArea, warnings)
       onUploadSuccess({
         file_type: fileType,
         data_source: showDataSourceSelect && dataSourceSelect ? dataSourceSelect.value : 'YNS',
         file_name: file.name,
         row_count: rowCount,
+        warnings,
       })
     } catch (err) {
       console.error(err)
       showToast(err.response?.data?.error || err.message || 'ファイルの解析または保存に失敗しました', 'error')
     }
   }
+}
+
+function renderUploadWarnings(previewArea, warnings) {
+  if (!Array.isArray(warnings) || warnings.length === 0) return
+
+  const html = warnings.map((warning) => `
+    <div class="upload-warning-box">
+      <strong>アップロードは完了しました。</strong>
+      <div>ただし、未登録の広告コードが${Number(warning.count || 0).toLocaleString('ja-JP')}件ありました。</div>
+      <div style="margin-top:8px">これらの広告コードは媒体を特定できないため取り込まれていません。<br />広告コードマスタへ登録後、再アップロードしてください。</div>
+      <div class="upload-warning-codes">
+        ${(warning.ad_codes || []).map((code) => `<span class="upload-warning-code">${escapeHtml(code)}</span>`).join('')}
+      </div>
+    </div>
+  `).join('')
+
+  previewArea.insertAdjacentHTML('beforeend', html)
 }
 
 function shouldSendCsvRows(fileType) {
