@@ -1551,6 +1551,8 @@ button {
   padding: 28px;
   width: 420px;
   max-width: 90vw;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
   box-shadow: var(--shadow-md);
 }
 
