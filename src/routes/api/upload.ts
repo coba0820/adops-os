@@ -148,6 +148,10 @@ const AD_MEDIA_HEADERS: Record<string, HeaderDefinition> = {
 }
 
 const MEDIA_SUMMARY_HEADERS: Record<string, HeaderDefinition> = {
+  siteName: {
+    label: 'サイト',
+    aliases: ['サイト', 'サイト名', 'サイト名称', 'site', 'Site', 'site_name'],
+  },
   date: {
     label: '日付',
     aliases: ['日付け', '日付', 'Date', '年月日', '対象日', '集計日'],
@@ -394,6 +398,7 @@ const MediaSummaryParser = {
     dataSource: UploadDataSource
   ): ParsedMediaSummaryRow[] {
     ensureHeaders(headerIndex, [
+      MEDIA_SUMMARY_HEADERS.siteName,
       MEDIA_SUMMARY_HEADERS.date,
       MEDIA_SUMMARY_HEADERS.adCode,
       MEDIA_SUMMARY_HEADERS.accessCount,
@@ -415,7 +420,7 @@ const MediaSummaryParser = {
       return {
         targetDate,
         adCode,
-        siteName: '',
+        siteName: getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.siteName.aliases),
         accessCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.accessCount.aliases)),
         registrationCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.registrationCount.aliases)),
         provisionalRegistrationCount: parseInteger(getCellByAliases(row, headerIndex, MEDIA_SUMMARY_HEADERS.provisionalRegistrationCount.aliases)),
@@ -432,6 +437,7 @@ const MediaSummaryParser = {
     dataSource: UploadDataSource
   ): ParsedMediaSummaryRow[] {
     ensureHeaders(headerIndex, [
+      INTERNAL_MEDIA_SUMMARY_HEADERS.siteName,
       INTERNAL_MEDIA_SUMMARY_HEADERS.date,
       INTERNAL_MEDIA_SUMMARY_HEADERS.adCode,
       INTERNAL_MEDIA_SUMMARY_HEADERS.accessCount,
@@ -522,6 +528,7 @@ const PaymentReportParser = {
     dataSource: UploadDataSource
   ): ParsedPaymentReportRow[] {
     ensureHeaders(headerIndex, [
+      INTERNAL_PAYMENT_REPORT_HEADERS.siteName,
       INTERNAL_PAYMENT_REPORT_HEADERS.customerId,
       INTERNAL_PAYMENT_REPORT_HEADERS.adCode,
       INTERNAL_PAYMENT_REPORT_HEADERS.registrationAt,
