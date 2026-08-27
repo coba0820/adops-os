@@ -878,6 +878,61 @@ async function ensureSitesByNames(db: D1Database, siteNames: string[]) {
   return siteByName
 }
 
+async function syncAdCodesFromCampaignRows(
+  db: D1Database,
+  rows: Array<{ id: number; ad_code: string; media_id: number | null }>
+) {
+  const adCodes = new Map<string, { id: number; ad_code: string; media_id: number | null }>()
+  rows.forEach((row) => {
+    const adCode = row.ad_code.trim()
+    if (adCode && !adCodes.has(adCode)) {
+      adCodes.set(adCode, { ...row, ad_code: adCode })
+    }
+  })
+
+  const targets = [...adCodes.values()]
+  if (targets.length === 0) {
+    return {
+      syncedAdCodeCount: 0,
+      adCodesSyncSkipped: false,
+    }
+  }
+
+  try {
+    for (let i = 0; i < targets.length; i += INSERT_BATCH_SIZE) {
+      const chunk = targets.slice(i, i + INSERT_BATCH_SIZE)
+      await db.batch(
+        chunk.map((row) =>
+          db.prepare(
+            `INSERT INTO ad_codes
+               (id, media_id, ad_code, is_active)
+             VALUES (?, ?, ?, 1)
+             ON CONFLICT(ad_code) DO UPDATE SET
+               media_id = COALESCE(ad_codes.media_id, excluded.media_id),
+               updated_at = CURRENT_TIMESTAMP`
+          )
+            .bind(row.id, row.media_id, row.ad_code)
+        )
+      )
+    }
+
+    return {
+      syncedAdCodeCount: targets.length,
+      adCodesSyncSkipped: false,
+    }
+  } catch (err) {
+    logUploadError('ad_codes auto sync failed', {
+      error: err instanceof Error ? err.message : String(err),
+      targetAdCodes: targets.length,
+    })
+
+    return {
+      syncedAdCodeCount: 0,
+      adCodesSyncSkipped: true,
+    }
+  }
+}
+
 async function ensureAdCodesAndSitesFromSiteRows(
   db: D1Database,
   rows: Array<{ adCode: string; siteName: string }>
@@ -893,12 +948,14 @@ async function ensureAdCodesAndSitesFromSiteRows(
     return {
       createdAdCodes: [] as string[],
       linkedPairCount: 0,
+      syncedAdCodeCount: 0,
+      adCodesSyncSkipped: false,
     }
   }
 
   const siteByName = await ensureSitesByNames(db, siteRows.map((row) => row.siteName))
-  const adCodeByCode = new Map<string, { id: number; ad_code: string; media_id: number }>()
-  const existingAdCodes = await fetchRowsByTextKey<{ id: number; ad_code: string; media_id: number }>(
+  const adCodeByCode = new Map<string, { id: number; ad_code: string; media_id: number | null }>()
+  const existingAdCodes = await fetchRowsByTextKey<{ id: number; ad_code: string; media_id: number | null }>(
     db,
     'campaign_master',
     'ad_code',
@@ -943,6 +1000,8 @@ async function ensureAdCodesAndSitesFromSiteRows(
     }
   }
 
+  const adCodeSync = await syncAdCodesFromCampaignRows(db, [...adCodeByCode.values()])
+
   const pairKeys = new Set<string>()
   const statements: D1PreparedStatement[] = []
   for (const row of siteRows) {
@@ -971,6 +1030,7 @@ async function ensureAdCodesAndSitesFromSiteRows(
   return {
     createdAdCodes,
     linkedPairCount: pairKeys.size,
+    ...adCodeSync,
   }
 }
 
@@ -1273,12 +1333,21 @@ async function buildMediaSummaryDailyRows(
     ? MediaSummaryParser.internalParser(headerIndex, bodyRows, uploadHistoryId, dataSource)
     : MediaSummaryParser.ynsParser(headerIndex, bodyRows, uploadHistoryId, dataSource)
 
-  const autoRegistration = await ensureAdCodesAndSitesFromSiteRows(db, parsedRows)
-  logUploadInfo('media_summary ad_code/site auto registration completed', {
-    parserType,
-    createdAdCodes: autoRegistration.createdAdCodes,
-    linkedPairCount: autoRegistration.linkedPairCount,
-  })
+  try {
+    const autoRegistration = await ensureAdCodesAndSitesFromSiteRows(db, parsedRows)
+    logUploadInfo('media_summary ad_code/site auto registration completed', {
+      parserType,
+      createdAdCodes: autoRegistration.createdAdCodes,
+      linkedPairCount: autoRegistration.linkedPairCount,
+      syncedAdCodeCount: autoRegistration.syncedAdCodeCount,
+      adCodesSyncSkipped: autoRegistration.adCodesSyncSkipped,
+    })
+  } catch (err) {
+    logUploadError('media_summary ad_code/site auto registration skipped', {
+      parserType,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
 
   const mediaIdsByAdCode = await resolveMediaIdsByAdCode(
     db,
@@ -1329,12 +1398,21 @@ async function buildPaymentReportDailyRows(
     ? PaymentReportParser.internalParser(headerIndex, bodyRows, uploadHistoryId, dataSource)
     : PaymentReportParser.ynsParser(headerIndex, bodyRows, uploadHistoryId, dataSource)
 
-  const autoRegistration = await ensureAdCodesAndSitesFromSiteRows(db, parsedRows)
-  logUploadInfo('payment_report ad_code/site auto registration completed', {
-    parserType,
-    createdAdCodes: autoRegistration.createdAdCodes,
-    linkedPairCount: autoRegistration.linkedPairCount,
-  })
+  try {
+    const autoRegistration = await ensureAdCodesAndSitesFromSiteRows(db, parsedRows)
+    logUploadInfo('payment_report ad_code/site auto registration completed', {
+      parserType,
+      createdAdCodes: autoRegistration.createdAdCodes,
+      linkedPairCount: autoRegistration.linkedPairCount,
+      syncedAdCodeCount: autoRegistration.syncedAdCodeCount,
+      adCodesSyncSkipped: autoRegistration.adCodesSyncSkipped,
+    })
+  } catch (err) {
+    logUploadError('payment_report ad_code/site auto registration skipped', {
+      parserType,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
 
   const mediaIdsByAdCode = await resolveMediaIdsByAdCode(
     db,
