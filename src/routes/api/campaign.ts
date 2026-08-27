@@ -13,6 +13,7 @@ import type {
 export const campaignRoute = new Hono<{ Bindings: Bindings }>()
 
 type CampaignBulkMode = 'create_only' | 'update_only' | 'upsert'
+type CampaignSearchMatch = 'partial' | 'exact'
 
 type CampaignBulkRow = {
   row_number: number
@@ -94,6 +95,16 @@ function buildAdCodeKey(adCode: string) {
 function parseBulkMode(value: unknown): CampaignBulkMode {
   if (value === 'create_only' || value === 'update_only') return value
   return 'upsert'
+}
+
+function parseCampaignSearchMatch(value: unknown): CampaignSearchMatch {
+  return value === 'exact' ? 'exact' : 'partial'
+}
+
+function parseCampaignStatusFilter(value: unknown) {
+  if (value === 'active' || value === '1') return 1
+  if (value === 'inactive' || value === '0') return 0
+  return null
 }
 
 function buildHeaderIndex(headerRow: unknown[]) {
@@ -610,6 +621,48 @@ async function applyCampaignBulkRows(db: D1Database, rows: CampaignBulkRow[]) {
 // 媒体マスタ・サイトマスタをJOINして名称も一緒に返す
 // ------------------------------------------------------------
 campaignRoute.get('/', async (c) => {
+  const keyword = normalizeLookupText(c.req.query('query') ?? c.req.query('q') ?? '')
+  const searchMatch = parseCampaignSearchMatch(c.req.query('match') ?? null)
+  const mediaId = parsePositiveInteger(c.req.query('media_id') ?? null)
+  const status = parseCampaignStatusFilter(c.req.query('status') ?? null)
+  const where: string[] = []
+  const bindings: Array<string | number> = []
+
+  if (mediaId) {
+    where.push('c.media_id = ?')
+    bindings.push(mediaId)
+  }
+
+  if (status !== null) {
+    where.push('c.is_active = ?')
+    bindings.push(status)
+  }
+
+  if (keyword) {
+    const operator = searchMatch === 'exact' ? '=' : 'LIKE'
+    const searchValue = searchMatch === 'exact' ? keyword : `%${keyword}%`
+    where.push(
+      `(LOWER(COALESCE(c.ad_code, '')) ${operator} ?
+        OR EXISTS (
+          SELECT 1
+          FROM ad_code_sites acs_search
+          INNER JOIN site_master s_search ON acs_search.site_id = s_search.id
+          WHERE acs_search.ad_code_id = c.id
+            AND LOWER(COALESCE(s_search.site_name, '')) ${operator} ?
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM ad_code_campaigns acc_search
+          INNER JOIN campaigns cp_search ON acc_search.campaign_id = cp_search.id
+          WHERE acc_search.ad_code_id = c.id
+            AND LOWER(COALESCE(cp_search.campaign_name, '')) ${operator} ?
+        ))`
+    )
+    bindings.push(searchValue, searchValue, searchValue)
+  }
+
+  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
+
   const { results } = await c.env.DB.prepare(
     `SELECT
        c.id, c.campaign_name, c.media_id, c.ad_code, c.site_id,
@@ -636,9 +689,12 @@ campaignRoute.get('/', async (c) => {
      LEFT JOIN site_master legacy_site ON c.site_id = legacy_site.id
      LEFT JOIN ad_code_campaigns acc ON c.id = acc.ad_code_id
      LEFT JOIN campaigns cp ON acc.campaign_id = cp.id
+     ${whereSql}
      GROUP BY c.id
-     ORDER BY c.id ASC`
-  ).all<CampaignMasterView>()
+     ORDER BY c.ad_code ASC, c.id ASC`
+  )
+    .bind(...bindings)
+    .all<CampaignMasterView>()
 
   return c.json<ApiResponse<CampaignMasterView[]>>({
     success: true,

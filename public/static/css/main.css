@@ -1067,6 +1067,24 @@ button {
   gap: 8px;
 }
 
+.campaign-master-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(130px, 0.8fr) minmax(150px, 1fr) minmax(120px, 0.8fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+
+.campaign-master-filter-bar .form-row {
+  margin-bottom: 0;
+}
+
+.campaign-master-filter-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .analysis-summary-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));

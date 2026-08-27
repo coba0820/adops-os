@@ -21,6 +21,12 @@ const MEDIA_STATUS_VIEW = {
 }
 
 let activeSubTab = 'media'
+let campaignMasterFilters = {
+  query: '',
+  match: 'partial',
+  mediaId: '',
+  status: '',
+}
 
 /**
  * マスタ管理画面を描画する
@@ -504,15 +510,15 @@ function openSiteModal(root, item) {
 async function renderCampaignMaster(root) {
   root.innerHTML = `<div class="empty-state">読み込み中...</div>`
 
-  const [campaigns, mediaList, siteList] = await Promise.all([
-    fetchList('/api/campaign'),
+  const [mediaList, siteList] = await Promise.all([
     fetchList('/api/media'),
     fetchList('/api/site'),
   ])
+  const campaigns = await fetchCampaignMasterList()
 
   root.innerHTML = `
     <div class="section-toolbar">
-      <p class="section-desc mt-0" style="margin-bottom:0">「媒体 → 広告コード → サイト」を紐付ける重要なマスタです。</p>
+      <p class="section-desc mt-0" style="margin-bottom:0">広告コードを中心に、媒体・サイト・使用キャンペーンを紐付けます。</p>
       <div class="action-btn-group">
         <button class="btn btn-secondary" id="campaign-template-download-btn">
           <i class="fa-solid fa-download"></i>テンプレートをダウンロード
@@ -525,14 +531,104 @@ async function renderCampaignMaster(root) {
         </button>
       </div>
     </div>
+    ${renderCampaignSearchBar(mediaList)}
     ${mediaList.length === 0 || siteList.length === 0 ? '<div class="form-hint" style="margin-bottom:16px">※ 先に媒体マスタ・サイトマスタを1件以上登録してください</div>' : ''}
     ${renderCampaignTable(campaigns)}
   `
 
+  bindCampaignSearchEvents(root)
   root.querySelector('#campaign-add-btn')?.addEventListener('click', () => openCampaignModal(root, null, mediaList, siteList))
   root.querySelector('#campaign-bulk-import-btn')?.addEventListener('click', () => openCampaignBulkImportModal(root))
   root.querySelector('#campaign-template-download-btn')?.addEventListener('click', downloadCampaignTemplate)
   bindCampaignRowEvents(root, campaigns, mediaList, siteList)
+}
+
+async function fetchCampaignMasterList() {
+  const params = {}
+  if (campaignMasterFilters.query.trim()) params.query = campaignMasterFilters.query.trim()
+  if (campaignMasterFilters.match) params.match = campaignMasterFilters.match
+  if (campaignMasterFilters.mediaId) params.media_id = campaignMasterFilters.mediaId
+  if (campaignMasterFilters.status) params.status = campaignMasterFilters.status
+
+  try {
+    const res = await axios.get('/api/campaign', { params })
+    return res.data.data || []
+  } catch (err) {
+    console.error(err)
+    showToast('広告コードの取得に失敗しました', 'error')
+    return []
+  }
+}
+
+function renderCampaignSearchBar(mediaList) {
+  const mediaOptions = mediaList
+    .map((media) => `<option value="${media.id}" ${String(campaignMasterFilters.mediaId) === String(media.id) ? 'selected' : ''}>${escapeHtml(media.media_name)}</option>`)
+    .join('')
+
+  return `
+    <div class="campaign-master-filter-bar">
+      <div class="form-row">
+        <label class="form-label">検索</label>
+        <input type="search" id="campaign-master-search" class="form-input" value="${escapeHtml(campaignMasterFilters.query)}" placeholder="広告コード・サイト名・キャンペーン名" />
+      </div>
+      <div class="form-row">
+        <label class="form-label">検索方法</label>
+        <select id="campaign-master-match" class="form-select">
+          <option value="partial" ${campaignMasterFilters.match !== 'exact' ? 'selected' : ''}>部分一致</option>
+          <option value="exact" ${campaignMasterFilters.match === 'exact' ? 'selected' : ''}>完全一致</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label class="form-label">媒体</label>
+        <select id="campaign-master-media-filter" class="form-select">
+          <option value="">すべて</option>
+          ${mediaOptions}
+        </select>
+      </div>
+      <div class="form-row">
+        <label class="form-label">状態</label>
+        <select id="campaign-master-status-filter" class="form-select">
+          <option value="" ${campaignMasterFilters.status === '' ? 'selected' : ''}>すべて</option>
+          <option value="active" ${campaignMasterFilters.status === 'active' ? 'selected' : ''}>有効</option>
+          <option value="inactive" ${campaignMasterFilters.status === 'inactive' ? 'selected' : ''}>無効</option>
+        </select>
+      </div>
+      <div class="campaign-master-filter-actions">
+        <button type="button" class="btn btn-primary" id="campaign-master-filter-apply">
+          <i class="fa-solid fa-filter"></i>適用
+        </button>
+        <button type="button" class="btn btn-secondary" id="campaign-master-filter-reset">
+          <i class="fa-solid fa-rotate-left"></i>リセット
+        </button>
+      </div>
+    </div>
+  `
+}
+
+function bindCampaignSearchEvents(root) {
+  const searchInput = root.querySelector('#campaign-master-search')
+  const matchSelect = root.querySelector('#campaign-master-match')
+  const mediaSelect = root.querySelector('#campaign-master-media-filter')
+  const statusSelect = root.querySelector('#campaign-master-status-filter')
+
+  const apply = () => {
+    campaignMasterFilters = {
+      query: searchInput?.value || '',
+      match: matchSelect?.value === 'exact' ? 'exact' : 'partial',
+      mediaId: mediaSelect?.value || '',
+      status: statusSelect?.value || '',
+    }
+    renderCampaignMaster(root)
+  }
+
+  root.querySelector('#campaign-master-filter-apply')?.addEventListener('click', apply)
+  root.querySelector('#campaign-master-filter-reset')?.addEventListener('click', () => {
+    campaignMasterFilters = { query: '', match: 'partial', mediaId: '', status: '' }
+    renderCampaignMaster(root)
+  })
+  searchInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') apply()
+  })
 }
 
 function renderCampaignTable(list) {

@@ -65,6 +65,15 @@ export interface CampaignMasterView extends CampaignMaster {
   campaign_count?: number
 }
 
+export interface AdCode {
+  id: number
+  media_id: number | null
+  ad_code: string
+  is_active: number
+  created_at: string
+  updated_at: string
+}
+
 export interface MediaCampaign {
   id: number
   media_id: number
