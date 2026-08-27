@@ -624,7 +624,9 @@ campaignRoute.get('/', async (c) => {
   const keyword = normalizeLookupText(c.req.query('query') ?? c.req.query('q') ?? '')
   const searchMatch = parseCampaignSearchMatch(c.req.query('match') ?? null)
   const mediaId = parsePositiveInteger(c.req.query('media_id') ?? null)
+  const siteId = parsePositiveInteger(c.req.query('site_id') ?? null)
   const status = parseCampaignStatusFilter(c.req.query('status') ?? null)
+  const campaignUnsetOnly = c.req.query('campaign_unset') === '1'
   const where: string[] = []
   const bindings: Array<string | number> = []
 
@@ -636,6 +638,29 @@ campaignRoute.get('/', async (c) => {
   if (status !== null) {
     where.push('c.is_active = ?')
     bindings.push(status)
+  }
+
+  if (siteId) {
+    where.push(
+      `(c.site_id = ?
+        OR EXISTS (
+          SELECT 1
+          FROM ad_code_sites acs_filter
+          WHERE acs_filter.ad_code_id = c.id
+            AND acs_filter.site_id = ?
+        ))`
+    )
+    bindings.push(siteId, siteId)
+  }
+
+  if (campaignUnsetOnly) {
+    where.push(
+      `NOT EXISTS (
+        SELECT 1
+        FROM ad_code_campaigns acc_filter
+        WHERE acc_filter.ad_code_id = c.id
+      )`
+    )
   }
 
   if (keyword) {

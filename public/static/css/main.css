@@ -1069,7 +1069,7 @@ button {
 
 .campaign-master-filter-bar {
   display: grid;
-  grid-template-columns: minmax(220px, 1.4fr) minmax(130px, 0.8fr) minmax(150px, 1fr) minmax(120px, 0.8fr) auto;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(120px, 0.8fr) minmax(140px, 1fr) minmax(140px, 1fr) minmax(110px, 0.7fr) auto auto;
   gap: 12px;
   align-items: end;
   margin-bottom: 16px;
@@ -1083,6 +1083,16 @@ button {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.campaign-master-checkbox-filter {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .analysis-summary-grid {

@@ -25,7 +25,9 @@ let campaignMasterFilters = {
   query: '',
   match: 'partial',
   mediaId: '',
+  siteId: '',
   status: '',
+  campaignUnset: false,
 }
 
 /**
@@ -531,7 +533,7 @@ async function renderCampaignMaster(root) {
         </button>
       </div>
     </div>
-    ${renderCampaignSearchBar(mediaList)}
+    ${renderCampaignSearchBar(mediaList, siteList)}
     ${mediaList.length === 0 || siteList.length === 0 ? '<div class="form-hint" style="margin-bottom:16px">※ 先に媒体マスタ・サイトマスタを1件以上登録してください</div>' : ''}
     ${renderCampaignTable(campaigns)}
   `
@@ -548,7 +550,9 @@ async function fetchCampaignMasterList() {
   if (campaignMasterFilters.query.trim()) params.query = campaignMasterFilters.query.trim()
   if (campaignMasterFilters.match) params.match = campaignMasterFilters.match
   if (campaignMasterFilters.mediaId) params.media_id = campaignMasterFilters.mediaId
+  if (campaignMasterFilters.siteId) params.site_id = campaignMasterFilters.siteId
   if (campaignMasterFilters.status) params.status = campaignMasterFilters.status
+  if (campaignMasterFilters.campaignUnset) params.campaign_unset = '1'
 
   try {
     const res = await axios.get('/api/campaign', { params })
@@ -560,9 +564,12 @@ async function fetchCampaignMasterList() {
   }
 }
 
-function renderCampaignSearchBar(mediaList) {
+function renderCampaignSearchBar(mediaList, siteList) {
   const mediaOptions = mediaList
     .map((media) => `<option value="${media.id}" ${String(campaignMasterFilters.mediaId) === String(media.id) ? 'selected' : ''}>${escapeHtml(media.media_name)}</option>`)
+    .join('')
+  const siteOptions = siteList
+    .map((site) => `<option value="${site.id}" ${String(campaignMasterFilters.siteId) === String(site.id) ? 'selected' : ''}>${escapeHtml(site.site_name)}</option>`)
     .join('')
 
   return `
@@ -586,6 +593,13 @@ function renderCampaignSearchBar(mediaList) {
         </select>
       </div>
       <div class="form-row">
+        <label class="form-label">サイト</label>
+        <select id="campaign-master-site-filter" class="form-select">
+          <option value="">すべて</option>
+          ${siteOptions}
+        </select>
+      </div>
+      <div class="form-row">
         <label class="form-label">状態</label>
         <select id="campaign-master-status-filter" class="form-select">
           <option value="" ${campaignMasterFilters.status === '' ? 'selected' : ''}>すべて</option>
@@ -593,6 +607,10 @@ function renderCampaignSearchBar(mediaList) {
           <option value="inactive" ${campaignMasterFilters.status === 'inactive' ? 'selected' : ''}>無効</option>
         </select>
       </div>
+      <label class="campaign-master-checkbox-filter">
+        <input type="checkbox" id="campaign-master-unset-filter" ${campaignMasterFilters.campaignUnset ? 'checked' : ''} />
+        キャンペーン未設定のみ
+      </label>
       <div class="campaign-master-filter-actions">
         <button type="button" class="btn btn-primary" id="campaign-master-filter-apply">
           <i class="fa-solid fa-filter"></i>適用
@@ -609,21 +627,25 @@ function bindCampaignSearchEvents(root) {
   const searchInput = root.querySelector('#campaign-master-search')
   const matchSelect = root.querySelector('#campaign-master-match')
   const mediaSelect = root.querySelector('#campaign-master-media-filter')
+  const siteSelect = root.querySelector('#campaign-master-site-filter')
   const statusSelect = root.querySelector('#campaign-master-status-filter')
+  const unsetInput = root.querySelector('#campaign-master-unset-filter')
 
   const apply = () => {
     campaignMasterFilters = {
       query: searchInput?.value || '',
       match: matchSelect?.value === 'exact' ? 'exact' : 'partial',
       mediaId: mediaSelect?.value || '',
+      siteId: siteSelect?.value || '',
       status: statusSelect?.value || '',
+      campaignUnset: !!unsetInput?.checked,
     }
     renderCampaignMaster(root)
   }
 
   root.querySelector('#campaign-master-filter-apply')?.addEventListener('click', apply)
   root.querySelector('#campaign-master-filter-reset')?.addEventListener('click', () => {
-    campaignMasterFilters = { query: '', match: 'partial', mediaId: '', status: '' }
+    campaignMasterFilters = { query: '', match: 'partial', mediaId: '', siteId: '', status: '', campaignUnset: false }
     renderCampaignMaster(root)
   })
   searchInput?.addEventListener('keydown', (event) => {
