@@ -19,6 +19,7 @@ import { analysisRoute } from './routes/api/analysis'
 import { budgetRoute } from './routes/api/budget'
 import { forecastRoute } from './routes/api/forecast'
 import { settingsRoute } from './routes/api/settings'
+import { mediaColumnMappingsRoute } from './routes/api/media-column-mappings'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -49,6 +50,7 @@ app.route('/api/analysis', analysisRoute) // 実績分析
 app.route('/api/budget', budgetRoute) // 予算管理
 app.route('/api/forecast', forecastRoute) // 着地予測
 app.route('/api/settings', settingsRoute) // 設定
+app.route('/api/media-column-mappings', mediaColumnMappingsRoute) // 広告媒体CSV 列マッピング
 
 // ------------------------------------------------------------
 // トップページ（SPAシェルを返す。以降はフロントJSがルーティング）

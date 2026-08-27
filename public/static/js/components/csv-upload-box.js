@@ -169,37 +169,51 @@ export function mountCsvUploadBox(rootEl, options) {
 
       const rowCount = countBodyRows(rows)
 
-      const uploadRes = await axios.post('/api/upload', {
-        file_type: fileType,
-        media_id: showMediaSelect && mediaSelect ? Number(mediaSelect.value) : null,
-        data_source: showDataSourceSelect && dataSourceSelect ? dataSourceSelect.value : 'YNS',
-        file_name: file.name,
-        row_count: rowCount,
-        csv_rows: shouldSendCsvRows(fileType) ? rows : undefined,
-        csv_text: shouldSendCsvRows(fileType) && fileFormat === 'csv' ? text : undefined,
-      })
-      const warnings = uploadRes.data?.data?.warnings || []
-      if (fileType === 'ad_media_csv') {
-        showToast(`広告媒体${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
-      } else if (fileType === 'site_summary_csv') {
-        showToast(`媒体集計${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
-      } else if (fileType === 'payment_report_csv') {
-        if (warnings.length > 0) {
-          showToast('決済レポートのアップロードは完了しましたが、未登録の広告コードがあります', 'warning')
+      const performUpload = async () => {
+        const uploadRes = await axios.post('/api/upload', {
+          file_type: fileType,
+          media_id: showMediaSelect && mediaSelect ? Number(mediaSelect.value) : null,
+          data_source: showDataSourceSelect && dataSourceSelect ? dataSourceSelect.value : 'YNS',
+          file_name: file.name,
+          row_count: rowCount,
+          csv_rows: shouldSendCsvRows(fileType) ? rows : undefined,
+          csv_text: shouldSendCsvRows(fileType) && fileFormat === 'csv' ? text : undefined,
+        })
+        const warnings = uploadRes.data?.data?.warnings || []
+        if (fileType === 'ad_media_csv') {
+          showToast(`広告媒体${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
+        } else if (fileType === 'site_summary_csv') {
+          showToast(`媒体集計${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
+        } else if (fileType === 'payment_report_csv') {
+          if (warnings.length > 0) {
+            showToast('決済レポートのアップロードは完了しましたが、未登録の広告コードがあります', 'warning')
+          } else {
+            showToast(`決済レポート${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
+          }
         } else {
-          showToast(`決済レポート${fileFormat.toUpperCase()}の実績を保存しました`, 'success')
+          showToast(`「${file.name}」を取込みました（${rowCount}行）`, 'success')
         }
-      } else {
-        showToast(`「${file.name}」を取込みました（${rowCount}行）`, 'success')
+        renderUploadWarnings(previewArea, warnings)
+        onUploadSuccess({
+          file_type: fileType,
+          data_source: showDataSourceSelect && dataSourceSelect ? dataSourceSelect.value : 'YNS',
+          file_name: file.name,
+          row_count: rowCount,
+          warnings,
+        })
       }
-      renderUploadWarnings(previewArea, warnings)
-      onUploadSuccess({
-        file_type: fileType,
-        data_source: showDataSourceSelect && dataSourceSelect ? dataSourceSelect.value : 'YNS',
-        file_name: file.name,
-        row_count: rowCount,
-        warnings,
-      })
+
+      if (fileType === 'ad_media_csv' && showMediaSelect && mediaSelect) {
+        const ready = await ensureAdMediaColumnMapping({
+          mediaId: Number(mediaSelect.value),
+          rows,
+          previewArea,
+          onReady: performUpload,
+        })
+        if (!ready) return
+      }
+
+      await performUpload()
     } catch (err) {
       console.error(err)
       showToast(err.response?.data?.error || err.message || 'ファイルの解析または保存に失敗しました', 'error')
@@ -222,6 +236,183 @@ function renderUploadWarnings(previewArea, warnings) {
   `).join('')
 
   previewArea.insertAdjacentHTML('beforeend', html)
+}
+
+async function ensureAdMediaColumnMapping({ mediaId, rows, previewArea, onReady }) {
+  const res = await axios.post('/api/media-column-mappings/preview', {
+    media_id: mediaId,
+    rows,
+  }).then((response) => response.data).catch((err) => err.response?.data || {
+    success: false,
+    error: '列マッピングの確認に失敗しました',
+  })
+
+  if (!res.success) {
+    renderAdMediaMappingRequired(previewArea, {
+      mediaId,
+      rows,
+      error: res.error || '列マッピングの確認に失敗しました',
+    }, onReady)
+    return false
+  }
+
+  const data = res.data
+  if (data.has_dedicated_parser || data.ready) return true
+
+  renderAdMediaMappingRequired(previewArea, {
+    mediaId,
+    rows,
+    data,
+  }, onReady)
+  return false
+}
+
+function renderAdMediaMappingRequired(previewArea, state, onReady) {
+  const data = state.data || {}
+  const fields = data.fields || []
+  const headers = data.headers || (state.rows?.[0] || [])
+  const sourceByField = new Map([
+    ...(data.suggested_mappings || []).map((mapping) => [mapping.fieldKey, mapping.sourceColumn]),
+    ...(data.mappings || []).map((mapping) => [mapping.fieldKey, mapping.sourceColumn]),
+  ])
+
+  const fieldRows = fields.map((field) => `
+    <div class="column-mapping-row">
+      <label>
+        ${escapeHtml(field.label)}
+        ${field.required ? '<span class="required-mark">*</span>' : ''}
+      </label>
+      <select class="form-select" data-mapping-field="${escapeHtml(field.key)}">
+        <option value="">未設定</option>
+        ${headers.map((header) => `
+          <option value="${escapeHtml(header)}" ${sourceByField.get(field.key) === header ? 'selected' : ''}>
+            ${escapeHtml(header)}
+          </option>
+        `).join('')}
+      </select>
+    </div>
+  `).join('')
+
+  previewArea.insertAdjacentHTML('beforeend', `
+    <div class="column-mapping-panel" id="ad-media-column-mapping-panel">
+      <div class="column-mapping-header">
+        <div>
+          <strong>この媒体の列マッピングが設定されていません</strong>
+          <p>${escapeHtml(state.error || 'CSV/XLSXの列とAdOps OSの項目を紐付けてください。')}</p>
+        </div>
+      </div>
+      ${data.missing_required?.length ? `
+        <div class="form-hint">未設定項目: ${data.missing_required.map(escapeHtml).join('、')}</div>
+      ` : ''}
+      <div class="column-mapping-grid">${fieldRows}</div>
+      <div id="ad-media-mapping-preview" class="column-mapping-preview"></div>
+      <div class="column-mapping-actions">
+        <button type="button" class="btn btn-secondary btn-sm" id="ad-media-mapping-preview-btn">
+          <i class="fa-solid fa-table"></i>変換プレビュー
+        </button>
+        <button type="button" class="btn btn-primary btn-sm" id="ad-media-mapping-save-btn">
+          <i class="fa-solid fa-floppy-disk"></i>この媒体のマッピングとして保存して取込
+        </button>
+      </div>
+    </div>
+  `)
+
+  const panel = previewArea.querySelector('#ad-media-column-mapping-panel')
+  const previewButton = panel.querySelector('#ad-media-mapping-preview-btn')
+  const saveButton = panel.querySelector('#ad-media-mapping-save-btn')
+  const previewRoot = panel.querySelector('#ad-media-mapping-preview')
+
+  previewButton.addEventListener('click', async () => {
+    const preview = await previewAdMediaColumnMapping(state.mediaId, state.rows, collectAdMediaMappings(panel))
+    if (!preview.success || !preview.data?.ready) {
+      showToast(
+        preview.error ||
+        preview.data?.preview_error ||
+        `必須項目が未設定です: ${(preview.data?.missing_required || []).join('、')}`,
+        'error'
+      )
+      return
+    }
+    renderAdMediaMappingPreview(previewRoot, preview.data.preview_rows || [])
+  })
+
+  saveButton.addEventListener('click', async () => {
+    const mappings = collectAdMediaMappings(panel)
+    const preview = await previewAdMediaColumnMapping(state.mediaId, state.rows, mappings)
+    if (!preview.success || !preview.data.ready) {
+      showToast(preview.error || preview.data?.preview_error || `必須項目が未設定です: ${(preview.data?.missing_required || []).join('、')}`, 'error')
+      return
+    }
+
+    saveButton.disabled = true
+    const saveRes = await axios.post('/api/media-column-mappings', {
+      media_id: state.mediaId,
+      mappings,
+    }).then((response) => response.data).catch((err) => err.response?.data || {
+      success: false,
+      error: '列マッピングの保存に失敗しました',
+    })
+    saveButton.disabled = false
+
+    if (!saveRes.success) {
+      showToast(saveRes.error || '列マッピングの保存に失敗しました', 'error')
+      return
+    }
+
+    showToast('列マッピングを保存しました', 'success')
+    await onReady()
+  })
+}
+
+function collectAdMediaMappings(panel) {
+  return [...panel.querySelectorAll('[data-mapping-field]')].map((select) => ({
+    fieldKey: select.dataset.mappingField,
+    sourceColumn: select.value,
+  }))
+}
+
+async function previewAdMediaColumnMapping(mediaId, rows, mappings) {
+  return axios.post('/api/media-column-mappings/preview', {
+    media_id: mediaId,
+    rows,
+    mappings,
+  }).then((response) => response.data).catch((err) => err.response?.data || {
+    success: false,
+    error: '変換プレビューに失敗しました',
+  })
+}
+
+function renderAdMediaMappingPreview(root, rows) {
+  if (rows.length === 0) {
+    root.innerHTML = '<div class="empty-state compact">プレビューできる行がありません</div>'
+    return
+  }
+
+  root.innerHTML = `
+    <div class="form-hint">変換後プレビュー</div>
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>日付</th><th>広告費</th><th>Imp</th><th>Click</th><th>媒体CV</th><th>キャンペーン名</th><th>キャンペーンID</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.slice(0, 20).map((row) => `
+            <tr>
+              <td>${escapeHtml(row.targetDate || '-')}</td>
+              <td>${Number(row.spend || 0).toLocaleString('ja-JP')}</td>
+              <td>${Number(row.impressions || 0).toLocaleString('ja-JP')}</td>
+              <td>${Number(row.clicks || 0).toLocaleString('ja-JP')}</td>
+              <td>${Number(row.mediaCv || 0).toLocaleString('ja-JP')}</td>
+              <td>${escapeHtml(row.campaignName || '-')}</td>
+              <td>${escapeHtml(row.campaignId || '-')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `
 }
 
 function shouldSendCsvRows(fileType) {

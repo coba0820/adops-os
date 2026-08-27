@@ -23,6 +23,30 @@ export type AdMediaCommonRow = {
   currency: string
 }
 
+export type AdMediaFieldKey =
+  | 'target_date'
+  | 'account_name'
+  | 'account_id'
+  | 'campaign_name'
+  | 'campaign_id'
+  | 'spend'
+  | 'impressions'
+  | 'clicks'
+  | 'media_cv'
+  | 'served_ads'
+
+export type AdMediaColumnMapping = {
+  fieldKey: AdMediaFieldKey
+  sourceColumn: string
+}
+
+export type AdMediaMappingField = {
+  key: AdMediaFieldKey
+  label: string
+  required: boolean
+  candidates: string[]
+}
+
 type CsvRows = string[][]
 
 type HeaderDefinition = {
@@ -196,6 +220,69 @@ const PARSERS: ParserDefinition[] = [
   },
 ]
 
+const MAPPING_FIELDS: AdMediaMappingField[] = [
+  {
+    key: 'target_date',
+    label: '日付',
+    required: true,
+    candidates: ['Date', 'Day', '日付', '集計日', 'report_date', 'aggregateTime', 'timestamp'],
+  },
+  {
+    key: 'account_name',
+    label: 'アカウント名',
+    required: false,
+    candidates: ['Account Name', 'account_name', 'アカウント名', 'advertiser_name'],
+  },
+  {
+    key: 'account_id',
+    label: 'アカウントID',
+    required: false,
+    candidates: ['Account ID', 'account_id', 'アカウントID', 'advertiser_id'],
+  },
+  {
+    key: 'campaign_name',
+    label: 'キャンペーン名',
+    required: false,
+    candidates: ['Campaign', 'Campaign Name', 'campaign_name', 'キャンペーン名', 'Offer'],
+  },
+  {
+    key: 'campaign_id',
+    label: 'キャンペーンID',
+    required: false,
+    candidates: ['Campaign ID', 'campaign_id', 'キャンペーンID', '広告コード'],
+  },
+  {
+    key: 'spend',
+    label: '広告費',
+    required: true,
+    candidates: ['Cost', 'Spend', 'Spent', '費用', 'コスト', 'Amount spent', 'spend', 'cost'],
+  },
+  {
+    key: 'impressions',
+    label: 'Imp',
+    required: false,
+    candidates: ['Imp', 'Impression', 'Impressions', '表示回数', 'views'],
+  },
+  {
+    key: 'clicks',
+    label: 'Click',
+    required: false,
+    candidates: ['Click', 'Clicks', 'クリック数', 'click_count'],
+  },
+  {
+    key: 'media_cv',
+    label: '媒体CV',
+    required: false,
+    candidates: ['CV', 'Cv', 'Conversion', 'Conversions', 'コンバージョン数', 'Install', 'Installs'],
+  },
+  {
+    key: 'served_ads',
+    label: 'Served Ads',
+    required: false,
+    candidates: ['Served Ads', '配信数'],
+  },
+]
+
 export function parseAdMediaRows(
   rows: CsvRows,
   options: ParseAdMediaOptions
@@ -256,6 +343,81 @@ export function getSupportedAdMediaParsers() {
   }))
 }
 
+export function hasDedicatedAdMediaParser(mediaName: string) {
+  const normalized = normalizeMediaName(mediaName)
+  return PARSERS.some((item) =>
+    item.mediaNames.some((name) => normalized.includes(normalizeMediaName(name)))
+  )
+}
+
+export function getAdMediaMappingFields() {
+  return MAPPING_FIELDS
+}
+
+export function inferAdMediaColumnMappings(headers: string[]) {
+  return MAPPING_FIELDS.map((field) => ({
+    fieldKey: field.key,
+    sourceColumn: findSuggestedColumn(headers, field.candidates),
+  }))
+}
+
+export function parseMappedAdMediaRows(
+  rows: CsvRows,
+  options: ParseAdMediaOptions & {
+    mappings: AdMediaColumnMapping[]
+    currency: 'JPY' | 'USD'
+  }
+): AdMediaCommonRow[] {
+  const [headerRow, ...bodyRows] = rows
+  if (!headerRow || headerRow.length === 0) {
+    throw new Error('列マッピング: ヘッダー行が見つかりません')
+  }
+
+  const headerIndex = buildHeaderIndex(headerRow)
+  const mappingByField = new Map<AdMediaFieldKey, string>()
+  options.mappings.forEach((mapping) => {
+    if (mapping.sourceColumn) mappingByField.set(mapping.fieldKey, mapping.sourceColumn)
+  })
+
+  const missingRequired = MAPPING_FIELDS
+    .filter((field) => field.required && !mappingByField.get(field.key))
+    .map((field) => field.label)
+  if (missingRequired.length > 0) {
+    throw new Error(`${options.mediaName}の列マッピングが不足しています。未設定項目: ${missingRequired.join(', ')}`)
+  }
+
+  return bodyRows
+    .filter((row) => !isBlankRow(row))
+    .map((row, index) => {
+      const targetDate = parseTargetDate(getMappedCell(row, headerIndex, mappingByField, 'target_date'))
+      if (!targetDate) {
+        throw new Error(`列マッピング: ${index + 2}行目の日付が正しくありません`)
+      }
+
+      const spendSource = parseMoney(getMappedCell(row, headerIndex, mappingByField, 'spend'))
+      const spend = convertSpendToJpy(spendSource, options.currency, targetDate, options.exchangeRates)
+      const impressions = parseInteger(getMappedCell(row, headerIndex, mappingByField, 'impressions'))
+      const campaignName = getMappedCell(row, headerIndex, mappingByField, 'campaign_name')
+      const campaignId = getMappedCell(row, headerIndex, mappingByField, 'campaign_id') || campaignName
+
+      return {
+        targetDate,
+        accountName: getMappedCell(row, headerIndex, mappingByField, 'account_name'),
+        accountId: getMappedCell(row, headerIndex, mappingByField, 'account_id'),
+        campaignName,
+        campaignId,
+        impressions,
+        clicks: parseInteger(getMappedCell(row, headerIndex, mappingByField, 'clicks')),
+        servedAds: mappingByField.get('served_ads')
+          ? parseInteger(getMappedCell(row, headerIndex, mappingByField, 'served_ads'))
+          : impressions,
+        spend,
+        mediaCv: parseInteger(getMappedCell(row, headerIndex, mappingByField, 'media_cv')),
+        currency: options.currency,
+      }
+    })
+}
+
 function resolveParser(mediaName: string) {
   const normalized = normalizeMediaName(mediaName)
   const parser = PARSERS.find((item) =>
@@ -265,6 +427,29 @@ function resolveParser(mediaName: string) {
     throw new Error(`未対応の広告媒体です: ${mediaName}`)
   }
   return parser
+}
+
+function findSuggestedColumn(headers: string[], candidates: string[]) {
+  for (const candidate of candidates) {
+    const exact = headers.find((header) => String(header ?? '').trim() === candidate)
+    if (exact) return exact
+  }
+
+  const normalizedCandidates = new Set(candidates.map((candidate) => normalizeLoose(candidate)))
+  return headers.find((header) => normalizedCandidates.has(normalizeLoose(header))) || ''
+}
+
+function getMappedCell(
+  row: string[],
+  headerIndex: Map<string, number>,
+  mappingByField: Map<AdMediaFieldKey, string>,
+  fieldKey: AdMediaFieldKey
+) {
+  const sourceColumn = mappingByField.get(fieldKey)
+  if (!sourceColumn) return ''
+  const index = headerIndex.get(normalizeHeader(sourceColumn))
+  if (index === undefined) return ''
+  return String(row[index] ?? '').trim()
 }
 
 function ensureParserHeaders(parser: ParserDefinition, headerIndex: Map<string, number>) {
@@ -290,6 +475,14 @@ function normalizeHeader(header: unknown) {
 
 function normalizeMediaName(name: string) {
   return String(name ?? '').trim().toLowerCase().replace(/[\s_-]/g, '')
+}
+
+function normalizeLoose(value: unknown) {
+  return String(value ?? '')
+    .replace(/^\uFEFF/, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_＿\-－()\[\]（）［］{}｛｝:：\/／・.．]/g, '')
 }
 
 function buildHeaderIndex(headerRow: string[]) {

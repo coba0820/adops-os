@@ -4,6 +4,7 @@
 // ============================================================
 import { showModal, closeModal, confirmDelete } from '../components/modal.js'
 import { showToast } from '../components/toast.js'
+import { decodeCsvFile, parseCsv } from '../components/csv-parser.js'
 import { parseXlsxFile } from '../components/xlsx-parser.js'
 
 const SUB_TABS = [
@@ -107,6 +108,7 @@ function renderMediaTable(list) {
         <td>${renderMediaStatusBadge(status)}</td>
         <td>
           <div class="action-btn-group">
+            <button class="icon-btn" data-action="mapping" data-id="${m.id}" title="CSV列マッピング"><i class="fa-solid fa-table-columns"></i></button>
             <button class="icon-btn" data-action="edit" data-id="${m.id}" title="編集"><i class="fa-solid fa-pen"></i></button>
             <button class="icon-btn danger" data-action="delete" data-id="${m.id}" title="削除"><i class="fa-solid fa-trash"></i></button>
           </div>
@@ -119,7 +121,7 @@ function renderMediaTable(list) {
   return `
     <div class="table-scroll">
       <table class="data-table">
-        <thead><tr><th>媒体ID</th><th>媒体名</th><th>通貨</th><th>状態</th><th style="width:100px">操作</th></tr></thead>
+        <thead><tr><th>媒体ID</th><th>媒体名</th><th>通貨</th><th>状態</th><th style="width:130px">操作</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -127,6 +129,12 @@ function renderMediaTable(list) {
 }
 
 function bindMediaRowEvents(root, list) {
+  root.querySelectorAll('[data-action="mapping"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const item = list.find((m) => m.id === Number(btn.dataset.id))
+      openMediaColumnMappingModal(item)
+    })
+  })
   root.querySelectorAll('[data-action="edit"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const item = list.find((m) => m.id === Number(btn.dataset.id))
@@ -166,7 +174,7 @@ function openMediaModal(root, item) {
         </select>
       </div>
       <div class="form-row">
-        <label class="form-label">騾夊ｲｨ</label>
+        <label class="form-label">通貨</label>
         <select id="modal-media-currency" class="form-select">
           <option value="JPY" ${currentCurrency === 'JPY' ? 'selected' : ''}>JPY</option>
           <option value="USD" ${currentCurrency === 'USD' ? 'selected' : ''}>USD</option>
@@ -194,6 +202,198 @@ function openMediaModal(root, item) {
       }
     },
   })
+}
+
+async function openMediaColumnMappingModal(media) {
+  if (!media) return
+
+  let fields = []
+  let headers = []
+  let rows = []
+  let savedMappings = []
+  let hasDedicatedParser = false
+
+  const mappingRes = await axios.get(`/api/media-column-mappings?media_id=${media.id}`)
+    .then((res) => res.data)
+    .catch((err) => err.response?.data || { success: false, error: '列マッピングの取得に失敗しました' })
+
+  if (!mappingRes.success) {
+    showToast(mappingRes.error || '列マッピングの取得に失敗しました', 'error')
+    return
+  }
+
+  fields = mappingRes.data.fields || []
+  savedMappings = mappingRes.data.mappings || []
+  hasDedicatedParser = !!mappingRes.data.has_dedicated_parser
+
+  showModal({
+    title: `${media.media_name}のCSV列マッピング`,
+    modalClass: 'modal-box-wide',
+    confirmLabel: '保存',
+    bodyHtml: `
+      <div class="column-mapping-panel is-modal">
+        ${hasDedicatedParser ? '<div class="form-hint">この媒体は専用Parserが優先されます。ここで保存した設定は、専用Parserがない媒体向けの汎用取込で利用します。</div>' : ''}
+        <div class="form-row">
+          <label class="form-label">ヘッダー取得用ファイル</label>
+          <input type="file" id="media-mapping-file" class="form-input" accept=".csv,.xlsx" />
+          <div class="form-hint">CSV / XLSX のヘッダーを読み込むと、プルダウンから列を選べます。</div>
+        </div>
+        <div id="media-mapping-grid"></div>
+        <div id="media-mapping-preview" class="column-mapping-preview"></div>
+        <div class="column-mapping-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="media-mapping-preview-btn">
+            <i class="fa-solid fa-table"></i>変換プレビュー
+          </button>
+        </div>
+      </div>
+    `,
+    onConfirm: async () => {
+      const modal = document.getElementById('active-modal-overlay')
+      const mappings = collectMediaColumnMappings(modal)
+      const res = await axios.post('/api/media-column-mappings', {
+        media_id: media.id,
+        mappings,
+      }).then((response) => response.data).catch((err) => err.response?.data || { success: false, error: '保存に失敗しました' })
+
+      if (!res.success) {
+        showToast(res.error || '列マッピングの保存に失敗しました', 'error')
+        return
+      }
+
+      closeModal()
+      showToast('列マッピングを保存しました', 'success')
+    },
+  })
+
+  const modal = document.getElementById('active-modal-overlay')
+  const gridRoot = modal.querySelector('#media-mapping-grid')
+  const fileInput = modal.querySelector('#media-mapping-file')
+  const previewButton = modal.querySelector('#media-mapping-preview-btn')
+  const previewRoot = modal.querySelector('#media-mapping-preview')
+
+  function renderGrid(suggestions = []) {
+    const sourceByField = new Map([
+      ...suggestions.map((mapping) => [mapping.fieldKey, mapping.sourceColumn]),
+      ...savedMappings.map((mapping) => [mapping.fieldKey, mapping.sourceColumn]),
+    ])
+    const optionHeaders = headers.length > 0
+      ? headers
+      : [...new Set(savedMappings.map((mapping) => mapping.sourceColumn).filter(Boolean))]
+
+    gridRoot.innerHTML = `
+      <div class="column-mapping-grid">
+        ${fields.map((field) => `
+          <div class="column-mapping-row">
+            <label>${escapeHtml(field.label)}${field.required ? '<span class="required-mark">*</span>' : ''}</label>
+            <select class="form-select" data-media-mapping-field="${escapeHtml(field.key)}">
+              <option value="">未設定</option>
+              ${optionHeaders.map((header) => `
+                <option value="${escapeHtml(header)}" ${sourceByField.get(field.key) === header ? 'selected' : ''}>
+                  ${escapeHtml(header)}
+                </option>
+              `).join('')}
+            </select>
+          </div>
+        `).join('')}
+      </div>
+    `
+  }
+
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files?.[0]
+    if (!file) return
+
+    try {
+      rows = await parseMediaMappingFile(file)
+      headers = rows[0] || []
+      const previewRes = await axios.post('/api/media-column-mappings/preview', {
+        media_id: media.id,
+        rows,
+      }).then((res) => res.data).catch((err) => err.response?.data || { success: false, error: 'ヘッダー解析に失敗しました' })
+      renderGrid(previewRes.data?.suggested_mappings || [])
+      showToast('ヘッダーを読み込みました', 'success')
+    } catch (err) {
+      showToast(err.message || 'ファイル解析に失敗しました', 'error')
+    }
+  })
+
+  previewButton.addEventListener('click', async () => {
+    if (rows.length === 0) {
+      showToast('先にCSV/XLSXファイルを選択してください', 'error')
+      return
+    }
+
+    const previewRes = await axios.post('/api/media-column-mappings/preview', {
+      media_id: media.id,
+      rows,
+      mappings: collectMediaColumnMappings(modal),
+    }).then((res) => res.data).catch((err) => err.response?.data || { success: false, error: '変換プレビューに失敗しました' })
+
+    if (!previewRes.success || !previewRes.data?.ready) {
+      showToast(
+        previewRes.error ||
+        previewRes.data?.preview_error ||
+        `必須項目が未設定です: ${(previewRes.data?.missing_required || []).join('、')}`,
+        'error'
+      )
+      return
+    }
+
+    renderMediaColumnMappingPreview(previewRoot, previewRes.data.preview_rows || [])
+  })
+
+  renderGrid()
+}
+
+async function parseMediaMappingFile(file) {
+  const name = file.name.toLowerCase()
+  if (name.endsWith('.csv')) {
+    const { text } = await decodeCsvFile(file)
+    return parseCsv(text)
+  }
+  if (name.endsWith('.xlsx')) {
+    const parsed = await parseXlsxFile(file)
+    return parsed.rows || []
+  }
+  throw new Error('CSVまたはXLSXファイルを選択してください')
+}
+
+function collectMediaColumnMappings(root) {
+  return [...root.querySelectorAll('[data-media-mapping-field]')].map((select) => ({
+    fieldKey: select.dataset.mediaMappingField,
+    sourceColumn: select.value,
+  }))
+}
+
+function renderMediaColumnMappingPreview(root, rows) {
+  if (rows.length === 0) {
+    root.innerHTML = '<div class="empty-state compact">プレビューできる行がありません</div>'
+    return
+  }
+
+  root.innerHTML = `
+    <div class="form-hint">変換後プレビュー</div>
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr><th>日付</th><th>広告費</th><th>Imp</th><th>Click</th><th>媒体CV</th><th>キャンペーン名</th><th>キャンペーンID</th></tr>
+        </thead>
+        <tbody>
+          ${rows.slice(0, 20).map((row) => `
+            <tr>
+              <td>${escapeHtml(row.targetDate || '-')}</td>
+              <td>${Number(row.spend || 0).toLocaleString('ja-JP')}</td>
+              <td>${Number(row.impressions || 0).toLocaleString('ja-JP')}</td>
+              <td>${Number(row.clicks || 0).toLocaleString('ja-JP')}</td>
+              <td>${Number(row.mediaCv || 0).toLocaleString('ja-JP')}</td>
+              <td>${escapeHtml(row.campaignName || '-')}</td>
+              <td>${escapeHtml(row.campaignId || '-')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `
 }
 
 // ============================================================

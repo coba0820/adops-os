@@ -9,7 +9,12 @@ import type {
   UploadStatusItem,
 } from '../../types'
 import { fetchAppSettings } from '../../lib/settings'
-import { parseAdMediaRows } from '../../lib/ad-media-parsers'
+import {
+  hasDedicatedAdMediaParser,
+  parseAdMediaRows,
+  parseMappedAdMediaRows,
+  type AdMediaColumnMapping,
+} from '../../lib/ad-media-parsers'
 
 export const uploadRoute = new Hono<{ Bindings: Bindings }>()
 
@@ -874,6 +879,27 @@ async function fetchExchangeRates(db: D1Database) {
   }
 }
 
+async function fetchAdMediaColumnMappings(db: D1Database, mediaId: number): Promise<AdMediaColumnMapping[]> {
+  try {
+    const { results } = await db.prepare(
+      `SELECT field_key, source_column
+       FROM media_column_mappings
+       WHERE media_id = ?
+         AND is_active = 1
+       ORDER BY id ASC`
+    )
+      .bind(mediaId)
+      .all<{ field_key: AdMediaColumnMapping['fieldKey']; source_column: string }>()
+
+    return results.map((row) => ({
+      fieldKey: row.field_key,
+      sourceColumn: row.source_column,
+    }))
+  } catch (err) {
+    return []
+  }
+}
+
 async function deleteOldPaymentReportRowsInRange(
   db: D1Database,
   rows: PaymentReportDailyRow[],
@@ -934,8 +960,10 @@ function buildAdMediaDailyRows(
   rows: CsvRows,
   mediaId: number,
   mediaName: string,
+  mediaCurrency: 'JPY' | 'USD',
   exchangeRates: Record<string, number>,
-  uploadHistoryId: number
+  uploadHistoryId: number,
+  columnMappings: AdMediaColumnMapping[]
 ) {
   const [headerRow, ...bodyRows] = rows
   if (!headerRow || headerRow.length === 0) {
@@ -948,64 +976,35 @@ function buildAdMediaDailyRows(
     headers: headerRow,
     normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
     mediaName,
+    parserType: hasDedicatedAdMediaParser(mediaName) ? 'dedicated' : 'mapping',
   })
 
-  return parseAdMediaRows(rows, { mediaName, exchangeRates }).map((row): AdMediaDailyRow => ({
+  const commonRows = hasDedicatedAdMediaParser(mediaName)
+    ? parseAdMediaRows(rows, { mediaName, exchangeRates })
+    : parseMappedAdMediaRows(rows, {
+      mediaName,
+      exchangeRates,
+      currency: mediaCurrency,
+      mappings: columnMappings,
+    })
+
+  return commonRows.map((row): AdMediaDailyRow => ({
     ...row,
     mediaId,
     uploadHistoryId,
   }))
+}
 
-  const headerIndex = buildHeaderIndex(headerRow)
-  ensureHeaders(headerIndex, [
-    AD_MEDIA_HEADERS.date,
-    AD_MEDIA_HEADERS.accountName,
-    AD_MEDIA_HEADERS.accountId,
-    AD_MEDIA_HEADERS.campaignName,
-    AD_MEDIA_HEADERS.campaignId,
-    AD_MEDIA_HEADERS.clicks,
-    AD_MEDIA_HEADERS.servedAds,
-    AD_MEDIA_HEADERS.impressions,
-    AD_MEDIA_HEADERS.spend,
-  ])
-
-  const mediaCvHeader = getMediaCvHeaderName(headerRow)
-  logUploadInfo('buildAdMediaDailyRows called', {
-    csvRows: rows.length,
-    bodyRows: countBodyRows(rows),
-    headers: headerRow,
-    normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
-    mediaCvHeader,
-    mediaName,
-  })
-
-  return parseAdMediaRows(rows, { mediaName, exchangeRates }).map((row): AdMediaDailyRow => ({
-    ...row,
-    mediaId,
-    uploadHistoryId,
-  }))
-
-  return bodyRows.filter((row) => !isBlankRow(row)).map((row, index): AdMediaDailyRow => {
-    const targetDate = parseTargetDate(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.date.aliases))
-    if (!targetDate) {
-      throw new Error(`${index + 2}行目のDateが正しくありません`)
-    }
-
-    return {
-      targetDate,
-      mediaId,
-      accountName: getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.accountName.aliases),
-      accountId: getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.accountId.aliases),
-      campaignName: getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.campaignName.aliases),
-      campaignId: getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.campaignId.aliases),
-      clicks: parseInteger(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.clicks.aliases)),
-      servedAds: parseInteger(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.servedAds.aliases)),
-      impressions: parseInteger(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.impressions.aliases)),
-      spend: parseMoney(getCellByAliases(row, headerIndex, AD_MEDIA_HEADERS.spend.aliases)),
-      mediaCv: parseInteger(getMediaCvCell(row, headerRow)),
-      uploadHistoryId,
-    }
-  })
+function buildAdMediaMappingRequiredError(mediaName: string) {
+  return [
+    `${mediaName}の列マッピングが設定されていません。`,
+    '',
+    '未設定項目:',
+    '・日付',
+    '・広告費',
+    '',
+    '列マッピングを設定してください。',
+  ].join('\n')
 }
 
 async function resolveMediaIdsByAdCode(db: D1Database, adCodes: string[]) {
@@ -1376,6 +1375,7 @@ uploadRoute.post('/', async (c) => {
 
   let mediaId: number | null = null
   let mediaName = ''
+  let mediaCurrency: 'JPY' | 'USD' = 'JPY'
 
   if (fileType === 'ad_media_csv') {
     const requestedMediaId = Number(body.media_id)
@@ -1387,10 +1387,10 @@ uploadRoute.post('/', async (c) => {
     }
 
     const media = await c.env.DB.prepare(
-      `SELECT id, media_name FROM media_master WHERE id = ? AND status = 'active'`
+      `SELECT id, media_name, currency FROM media_master WHERE id = ? AND status = 'active'`
     )
       .bind(requestedMediaId)
-      .first<{ id: number; media_name: string }>()
+      .first<{ id: number; media_name: string; currency: string | null }>()
 
     if (!media) {
       return c.json<ApiResponse<null>>(
@@ -1401,6 +1401,7 @@ uploadRoute.post('/', async (c) => {
 
     mediaId = requestedMediaId
     mediaName = media.media_name
+    mediaCurrency = String(media.currency || 'JPY').toUpperCase() === 'USD' ? 'USD' : 'JPY'
   }
 
   const csvRows =
@@ -1467,16 +1468,25 @@ uploadRoute.post('/', async (c) => {
   const exchangeRates = fileType === 'ad_media_csv'
     ? await fetchExchangeRates(c.env.DB)
     : {}
+  const adMediaColumnMappings = fileType === 'ad_media_csv' && mediaId
+    ? await fetchAdMediaColumnMappings(c.env.DB, mediaId)
+    : []
 
   try {
     if (fileType === 'ad_media_csv') {
+      if (!hasDedicatedAdMediaParser(mediaName) && adMediaColumnMappings.length === 0) {
+        throw new Error(buildAdMediaMappingRequiredError(mediaName))
+      }
+
       preparedAdMediaRows = aggregateAdMediaRows(
         buildAdMediaDailyRows(
           csvRows,
           mediaId,
           mediaName,
+          mediaCurrency,
           exchangeRates,
-          0
+          0,
+          adMediaColumnMappings
         )
       )
       adMediaDateRange = getTargetDateRange(preparedAdMediaRows)
