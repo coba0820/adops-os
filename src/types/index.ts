@@ -60,6 +60,18 @@ export interface CampaignMasterView extends CampaignMaster {
   site_name: string
   site_names?: string
   site_count?: number
+  campaign_ids?: number[]
+  campaign_names?: string
+  campaign_count?: number
+}
+
+export interface MediaCampaign {
+  id: number
+  media_id: number
+  campaign_name: string
+  is_active: number
+  created_at: string
+  updated_at: string
 }
 
 export interface CampaignGroup {

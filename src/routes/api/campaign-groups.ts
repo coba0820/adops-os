@@ -26,6 +26,8 @@ type CampaignGroupAdCodeView = {
   site_name: string
   site_names?: string
   site_count?: number
+  campaign_names?: string
+  campaign_count?: number
   is_active: number
   group_id: number | null
   group_name: string | null
@@ -97,6 +99,8 @@ async function fetchGroupAdCodes(db: D1Database, id: number) {
        COALESCE(GROUP_CONCAT(DISTINCT s.site_name), legacy_site.site_name, '') AS site_names,
        COUNT(DISTINCT acs.site_id) AS site_count,
        COALESCE(GROUP_CONCAT(DISTINCT acs.site_id), CAST(c.site_id AS TEXT)) AS site_ids,
+       COALESCE(GROUP_CONCAT(DISTINCT cp.campaign_name), c.campaign_name, '') AS campaign_names,
+       COUNT(DISTINCT cp.id) AS campaign_count,
        c.is_active,
        g.id AS group_id, g.group_name
      FROM campaign_group_ad_codes l
@@ -105,6 +109,8 @@ async function fetchGroupAdCodes(db: D1Database, id: number) {
      LEFT JOIN ad_code_sites acs ON c.id = acs.ad_code_id
      LEFT JOIN site_master s ON acs.site_id = s.id
      LEFT JOIN site_master legacy_site ON c.site_id = legacy_site.id
+     LEFT JOIN ad_code_campaigns acc ON c.id = acc.ad_code_id
+     LEFT JOIN campaigns cp ON acc.campaign_id = cp.id
      LEFT JOIN campaign_groups g ON l.campaign_group_id = g.id
      WHERE l.campaign_group_id = ?
      GROUP BY c.id, g.id
@@ -278,6 +284,8 @@ campaignGroupRoute.get('/available-ad-codes', async (c) => {
        COALESCE(GROUP_CONCAT(DISTINCT s.site_name), legacy_site.site_name, '') AS site_names,
        COUNT(DISTINCT acs.site_id) AS site_count,
        COALESCE(GROUP_CONCAT(DISTINCT acs.site_id), CAST(c.site_id AS TEXT)) AS site_ids,
+       COALESCE(GROUP_CONCAT(DISTINCT cp.campaign_name), c.campaign_name, '') AS campaign_names,
+       COUNT(DISTINCT cp.id) AS campaign_count,
        c.is_active,
        l.campaign_group_id AS group_id,
        g.group_name
@@ -288,6 +296,8 @@ campaignGroupRoute.get('/available-ad-codes', async (c) => {
      LEFT JOIN ad_code_sites acs ON c.id = acs.ad_code_id
      LEFT JOIN site_master s ON acs.site_id = s.id
      LEFT JOIN site_master legacy_site ON c.site_id = legacy_site.id
+     LEFT JOIN ad_code_campaigns acc ON c.id = acc.ad_code_id
+     LEFT JOIN campaigns cp ON acc.campaign_id = cp.id
      WHERE ${where.join(' AND ')}
      GROUP BY c.id, l.campaign_group_id
      ORDER BY c.ad_code ASC, c.id ASC`

@@ -443,11 +443,14 @@ analysisRoute.get('/summary', async (c) => {
           g.id AS group_id,
           g.group_name,
           g.media_id,
-          c.campaign_name,
+          cp.campaign_name,
           NULLIF(TRIM(c.ad_code), '') AS ad_code
         FROM campaign_groups g
         INNER JOIN campaign_group_ad_codes l ON g.id = l.campaign_group_id
         INNER JOIN campaign_master c ON l.ad_code_id = c.id
+        LEFT JOIN ad_code_campaigns acc ON c.id = acc.ad_code_id
+        LEFT JOIN campaigns cp ON acc.campaign_id = cp.id
+          AND cp.is_active = 1
         ${groupWhere.whereSql}
       ),
       group_ad_codes AS (
@@ -469,6 +472,25 @@ analysisRoute.get('/summary', async (c) => {
         GROUP BY gac.ad_code
         HAVING COUNT(DISTINCT CAST(gac.group_id AS TEXT) || ':' || CAST(gac.media_id AS TEXT)) = 1
       ),
+      group_campaign_names AS (
+        SELECT DISTINCT
+          group_id,
+          group_name,
+          media_id,
+          campaign_name
+        FROM group_campaigns
+        WHERE NULLIF(TRIM(campaign_name), '') IS NOT NULL
+      ),
+      unique_group_campaigns AS (
+        SELECT
+          gcn.media_id,
+          gcn.campaign_name,
+          MIN(gcn.group_id) AS group_id,
+          MIN(gcn.group_name) AS group_name
+        FROM group_campaign_names gcn
+        GROUP BY gcn.media_id, gcn.campaign_name
+        HAVING COUNT(DISTINCT gcn.group_id) = 1
+      ),
       ad_matches AS (
         SELECT DISTINCT
           d.id,
@@ -483,12 +505,27 @@ analysisRoute.get('/summary', async (c) => {
           d.clicks,
           COALESCE(d.media_cv, 0) AS media_cv
         FROM ad_media_daily d
-        INNER JOIN group_campaigns gc
+        INNER JOIN unique_group_campaigns gc
           ON gc.media_id = d.media_id
-         AND (
-           gc.campaign_name = d.campaign_name
-           OR (gc.ad_code IS NOT NULL AND gc.ad_code = d.campaign_id)
-         )
+         AND gc.campaign_name = d.campaign_name
+        ${adWhere.whereSql}
+        UNION
+        SELECT DISTINCT
+          d.id,
+          ${adPeriodSql.period} AS period,
+          ${adPeriodSql.periodStart} AS period_start,
+          ${adPeriodSql.periodEnd} AS period_end,
+          gc.group_id AS campaign_group_id,
+          gc.group_name AS campaign_group_name,
+          gc.media_id,
+          d.spend,
+          d.impressions,
+          d.clicks,
+          COALESCE(d.media_cv, 0) AS media_cv
+        FROM ad_media_daily d
+        INNER JOIN unique_group_ad_codes gc
+          ON gc.media_id = d.media_id
+         AND gc.ad_code = d.campaign_id
         ${adWhere.whereSql}
       ),
       ad_agg AS (
@@ -586,6 +623,7 @@ analysisRoute.get('/summary', async (c) => {
       detailSql,
       [
         ...groupWhere.bindings,
+        ...adWhere.bindings,
         ...adWhere.bindings,
         ...summaryWhere.bindings,
         ...(hasPaymentReportTable ? paymentWhereBase.bindings : []),

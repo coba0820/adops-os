@@ -16,7 +16,7 @@ type CampaignBulkMode = 'create_only' | 'update_only' | 'upsert'
 
 type CampaignBulkRow = {
   row_number: number
-  campaign_name: string
+  campaign_names: string[]
   media: string
   ad_code: string
   sites: string
@@ -48,7 +48,7 @@ const CAMPAIGN_BULK_MAX_ROWS = 5000
 const CAMPAIGN_BULK_CHUNK_SIZE = 100
 
 const CAMPAIGN_BULK_HEADERS = {
-  campaignName: ['キャンペーン名', 'campaign_name', 'campaign name'],
+  campaignName: ['使用キャンペーン', 'キャンペーン名', 'campaign_name', 'campaign name', 'campaigns'],
   media: ['媒体', 'media', '媒体名', 'media_name'],
   adCode: ['広告コード', 'ad_code', 'ad code', '広告cd'],
   sites: ['サイト', 'sites', 'site', 'site_name', 'サイト名'],
@@ -87,8 +87,8 @@ function normalizeAdCodeKey(value: unknown) {
   return String(value ?? '').trim().toLowerCase()
 }
 
-function buildCampaignKey(mediaId: number, adCode: string) {
-  return `${mediaId}|${normalizeAdCodeKey(adCode)}`
+function buildAdCodeKey(adCode: string) {
+  return normalizeAdCodeKey(adCode)
 }
 
 function parseBulkMode(value: unknown): CampaignBulkMode {
@@ -136,6 +136,15 @@ function splitSiteNames(value: string) {
     String(value ?? '')
       .split(/[,、;\n\r]+/)
       .map((siteName) => siteName.trim())
+      .filter(Boolean)
+  )]
+}
+
+function splitCampaignNames(value: string) {
+  return [...new Set(
+    String(value ?? '')
+      .split(/[,、;\n\r]+/)
+      .map((campaignName) => campaignName.trim())
       .filter(Boolean)
   )]
 }
@@ -200,6 +209,103 @@ async function replaceAdCodeSites(db: D1Database, adCodeId: number, siteIds: num
          VALUES (?, ?)`
       )
         .bind(adCodeId, siteId)
+    ),
+  ]
+
+  await db.batch(statements)
+}
+
+async function ensureCampaignsByNames(db: D1Database, mediaId: number, campaignNames: string[]) {
+  const names = [...new Set(campaignNames.map((name) => name.trim()).filter(Boolean))]
+  if (names.length === 0) return []
+
+  for (const name of names) {
+    await db.prepare(
+      `INSERT OR IGNORE INTO campaigns
+         (media_id, campaign_name, is_active)
+       VALUES (?, ?, 1)`
+    )
+      .bind(mediaId, name)
+      .run()
+  }
+
+  const campaignIds: number[] = []
+  for (const name of names) {
+    const campaign = await db.prepare(
+      `SELECT id
+       FROM campaigns
+       WHERE media_id = ?
+         AND campaign_name = ?
+       LIMIT 1`
+    )
+      .bind(mediaId, name)
+      .first<{ id: number }>()
+
+    if (campaign?.id) campaignIds.push(campaign.id)
+  }
+
+  return campaignIds
+}
+
+async function ensureAdCodeIsUnique(db: D1Database, adCode: string, excludeId?: number) {
+  const normalizedAdCode = adCode.trim()
+  if (!normalizedAdCode) return
+
+  const bindings: Array<string | number> = [normalizedAdCode]
+  const excludeSql = excludeId ? 'AND id <> ?' : ''
+  if (excludeId) bindings.push(excludeId)
+
+  const existing = await db.prepare(
+    `SELECT id
+     FROM campaign_master
+     WHERE NULLIF(TRIM(ad_code), '') = ?
+       ${excludeSql}
+     LIMIT 1`
+  )
+    .bind(...bindings)
+    .first<{ id: number }>()
+
+  if (existing) {
+    throw new Error('同じ広告コードが既に登録されています')
+  }
+}
+
+async function fetchCampaignsByIds(db: D1Database, mediaId: number, campaignIds: number[]) {
+  const ids = [...new Set(campaignIds.map(parsePositiveInteger).filter((id): id is number => id !== null))]
+  if (ids.length === 0) return []
+
+  const campaigns: Array<{ id: number; campaign_name: string }> = []
+  for (let index = 0; index < ids.length; index += CAMPAIGN_BULK_CHUNK_SIZE) {
+    const chunk = ids.slice(index, index + CAMPAIGN_BULK_CHUNK_SIZE)
+    const placeholders = chunk.map(() => '?').join(', ')
+    const { results } = await db.prepare(
+      `SELECT id, campaign_name
+       FROM campaigns
+       WHERE media_id = ?
+         AND id IN (${placeholders})
+         AND is_active = 1
+       ORDER BY campaign_name ASC`
+    )
+      .bind(mediaId, ...chunk)
+      .all<{ id: number; campaign_name: string }>()
+
+    campaigns.push(...results)
+  }
+
+  return campaigns
+}
+
+async function replaceAdCodeCampaigns(db: D1Database, adCodeId: number, campaignIds: number[]) {
+  const ids = [...new Set(campaignIds.map(parsePositiveInteger).filter((id): id is number => id !== null))]
+  const statements = [
+    db.prepare('DELETE FROM ad_code_campaigns WHERE ad_code_id = ?').bind(adCodeId),
+    ...ids.map((campaignId) =>
+      db.prepare(
+        `INSERT OR IGNORE INTO ad_code_campaigns
+           (ad_code_id, campaign_id)
+         VALUES (?, ?)`
+      )
+        .bind(adCodeId, campaignId)
     ),
   ]
 
@@ -272,7 +378,6 @@ async function buildCampaignBulkPreview(
 
   const headerIndex = buildHeaderIndex(rows[0])
   const missingHeaders = [
-    headerIndex.campaignName < 0 ? 'キャンペーン名' : '',
     headerIndex.media < 0 ? '媒体' : '',
     headerIndex.adCode < 0 ? '広告コード' : '',
     headerIndex.sites < 0 ? 'サイト' : '',
@@ -294,14 +399,14 @@ async function buildCampaignBulkPreview(
   const siteByName = new Map(
     siteResult.results.map((site) => [normalizeLookupText(site.site_name), site])
   )
-  const campaignIdsByKey = new Map<string, number[]>()
+  const adCodeIdsByKey = new Map<string, number[]>()
 
   campaignResult.results.forEach((campaign) => {
     const adCode = campaign.ad_code?.trim()
-    if (!campaign.media_id || !adCode) return
+    if (!adCode) return
 
-    const key = buildCampaignKey(campaign.media_id, adCode)
-    campaignIdsByKey.set(key, [...(campaignIdsByKey.get(key) || []), campaign.id])
+    const key = buildAdCodeKey(adCode)
+    adCodeIdsByKey.set(key, [...(adCodeIdsByKey.get(key) || []), campaign.id])
   })
 
   const previewRows: CampaignBulkRow[] = []
@@ -311,18 +416,21 @@ async function buildCampaignBulkPreview(
   bodyRows.forEach((row, index) => {
     const mediaName = row[headerIndex.media] || ''
     const adCode = row[headerIndex.adCode] || ''
-    const campaignName = row[headerIndex.campaignName] || ''
+    const campaignNames = headerIndex.campaignName >= 0
+      ? splitCampaignNames(row[headerIndex.campaignName] || '')
+      : []
     const extraCellCount = Math.max(row.length - headerColumnCount, 0)
     const statusIndex = headerIndex.status >= 0
       ? Math.min(headerIndex.status + extraCellCount, row.length - 1)
       : -1
-    const sitesEndIndex = statusIndex > headerIndex.sites ? statusIndex : row.length
+    const nextIndexes = [statusIndex, headerIndex.campaignName]
+      .filter((columnIndex) => columnIndex > headerIndex.sites)
+    const sitesEndIndex = nextIndexes.length > 0 ? Math.min(...nextIndexes) : row.length
     const sites = row.slice(headerIndex.sites, sitesEndIndex).join(',').trim()
     const statusText = statusIndex >= 0 ? row[statusIndex] || '' : ''
     const errors: string[] = []
 
     const media = mediaByName.get(normalizeLookupText(mediaName))
-    if (!campaignName) errors.push('キャンペーン名は必須です')
     if (!mediaName) errors.push('媒体は必須です')
     if (mediaName && !media) errors.push(`媒体「${mediaName}」が登録されていません`)
     if (!adCode) errors.push('広告コードは必須です')
@@ -349,16 +457,16 @@ async function buildCampaignBulkPreview(
       errors.push('状態は「有効」または「無効」で指定してください')
     }
 
-    const existingIds = media && adCode
-      ? campaignIdsByKey.get(buildCampaignKey(media.id, adCode)) || []
+    const existingIds = adCode
+      ? adCodeIdsByKey.get(buildAdCodeKey(adCode)) || []
       : []
     if (existingIds.length > 1) {
-      errors.push('同じ媒体＋広告コードの既存データが複数あるため更新できません')
+      errors.push('同じ広告コードの既存データが複数あるため更新できません')
     }
 
     const previewRow: CampaignBulkRow = {
       row_number: index + 2,
-      campaign_name: campaignName,
+      campaign_names: campaignNames,
       media: mediaName,
       ad_code: adCode,
       sites,
@@ -372,8 +480,8 @@ async function buildCampaignBulkPreview(
       errors,
     }
 
-    if (media && adCode) {
-      const key = buildCampaignKey(media.id, adCode)
+    if (adCode) {
+      const key = buildAdCodeKey(adCode)
       fileRowsByKey.set(key, [...(fileRowsByKey.get(key) || []), previewRow])
     }
 
@@ -384,7 +492,7 @@ async function buildCampaignBulkPreview(
     if (sameKeyRows.length <= 1) return
     const rowNumbers = sameKeyRows.map((row) => `${row.row_number}行目`).join('、')
     sameKeyRows.forEach((row) => {
-      row.errors.push(`ファイル内で媒体＋広告コードが重複しています（${rowNumbers}）`)
+      row.errors.push(`ファイル内で広告コードが重複しています（${rowNumbers}）`)
     })
   })
 
@@ -427,15 +535,20 @@ async function applyCampaignBulkRows(db: D1Database, rows: CampaignBulkRow[]) {
     for (const row of chunk) {
       let createdCampaignId: number | null = null
       try {
+        const linkedCampaignIds = row.media_id
+          ? await ensureCampaignsByNames(db, row.media_id, row.campaign_names)
+          : []
+        const legacyCampaignName = row.campaign_names[0] ?? ''
+
         if (row.judgement === '更新' && row.existing_id) {
           await db.prepare(
             `UPDATE campaign_master
              SET campaign_name = ?, media_id = ?, ad_code = ?, site_id = ?,
                  is_active = ?, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?`
+            WHERE id = ?`
           )
             .bind(
-              row.campaign_name.trim(),
+              legacyCampaignName,
               row.media_id,
               row.ad_code.trim(),
               row.site_ids[0],
@@ -445,15 +558,16 @@ async function applyCampaignBulkRows(db: D1Database, rows: CampaignBulkRow[]) {
             .run()
 
           await replaceAdCodeSites(db, row.existing_id, row.site_ids)
+          await replaceAdCodeCampaigns(db, row.existing_id, linkedCampaignIds)
           updated += 1
         } else {
           const result = await db.prepare(
             `INSERT INTO campaign_master
                (campaign_name, media_id, ad_code, site_id, is_active)
-             VALUES (?, ?, ?, ?, ?)`
+            VALUES (?, ?, ?, ?, ?)`
           )
             .bind(
-              row.campaign_name.trim(),
+              legacyCampaignName,
               row.media_id,
               row.ad_code.trim(),
               row.site_ids[0],
@@ -465,6 +579,7 @@ async function applyCampaignBulkRows(db: D1Database, rows: CampaignBulkRow[]) {
           if (!createdCampaignId) throw new Error('広告コードの作成に失敗しました')
 
           await replaceAdCodeSites(db, createdCampaignId, row.site_ids)
+          await replaceAdCodeCampaigns(db, createdCampaignId, linkedCampaignIds)
           created += 1
         }
 
@@ -472,6 +587,7 @@ async function applyCampaignBulkRows(db: D1Database, rows: CampaignBulkRow[]) {
       } catch (err) {
         if (createdCampaignId) {
           await db.batch([
+            db.prepare('DELETE FROM ad_code_campaigns WHERE ad_code_id = ?').bind(createdCampaignId),
             db.prepare('DELETE FROM ad_code_sites WHERE ad_code_id = ?').bind(createdCampaignId),
             db.prepare('DELETE FROM campaign_master WHERE id = ?').bind(createdCampaignId),
           ])
@@ -501,6 +617,9 @@ campaignRoute.get('/', async (c) => {
        m.media_name,
        COALESCE(GROUP_CONCAT(DISTINCT s.site_name), '') AS site_names,
        COUNT(DISTINCT acs.site_id) AS site_count,
+       COALESCE(GROUP_CONCAT(DISTINCT cp.campaign_name), '') AS campaign_names,
+       COUNT(DISTINCT cp.id) AS campaign_count,
+       COALESCE(GROUP_CONCAT(DISTINCT cp.id), '') AS campaign_ids,
        COALESCE(
          CASE
            WHEN COUNT(DISTINCT acs.site_id) = 1 THEN MAX(s.site_name)
@@ -515,6 +634,8 @@ campaignRoute.get('/', async (c) => {
      LEFT JOIN ad_code_sites acs ON c.id = acs.ad_code_id
      LEFT JOIN site_master s ON acs.site_id = s.id
      LEFT JOIN site_master legacy_site ON c.site_id = legacy_site.id
+     LEFT JOIN ad_code_campaigns acc ON c.id = acc.ad_code_id
+     LEFT JOIN campaigns cp ON acc.campaign_id = cp.id
      GROUP BY c.id
      ORDER BY c.id ASC`
   ).all<CampaignMasterView>()
@@ -527,6 +648,10 @@ campaignRoute.get('/', async (c) => {
         .split(',')
         .map((id) => Number(id))
         .filter((id) => Number.isInteger(id) && id > 0),
+      campaign_ids: String((campaign as unknown as { campaign_ids?: string }).campaign_ids ?? '')
+        .split(',')
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0),
     })),
   })
 })
@@ -536,14 +661,107 @@ campaignRoute.get('/', async (c) => {
 // ------------------------------------------------------------
 campaignRoute.get('/template', async (c) => {
   const csv = buildCsv([
-    ['キャンペーン名', '媒体', '広告コード', 'サイト', '状態'],
-    ['ヒットザマーク_記事202607', 'Taboola', 'tabb002', 'ヒットザマーク、競艇ナビ', '有効'],
-    ['app395系_LP', 'Facebook', 'app395lp', '馬スポ', '有効'],
+    ['広告コード', '媒体', 'サイト', '使用キャンペーン', '状態'],
+    ['tabb002', 'Taboola', 'ヒットザマーク、競艇ナビ', 'ヒットザマーク_記事202607', '有効'],
+    ['app395lp', 'Facebook', '馬スポ', 'app395系_LP', '有効'],
   ])
 
   c.header('Content-Type', 'text/csv; charset=utf-8')
   c.header('Content-Disposition', 'attachment; filename="campaign_master_template.csv"')
   return c.body(csv)
+})
+
+// ------------------------------------------------------------
+// 媒体キャンペーン候補: GET /api/campaign/campaigns?media_id=...
+// ------------------------------------------------------------
+campaignRoute.get('/campaigns', async (c) => {
+  const mediaId = parsePositiveInteger(c.req.query('media_id') ?? null)
+  const keyword = normalizeLookupText(c.req.query('q') ?? '')
+  const where: string[] = ['cp.is_active = 1']
+  const bindings: Array<string | number> = []
+
+  if (mediaId) {
+    where.push('cp.media_id = ?')
+    bindings.push(mediaId)
+  }
+
+  if (keyword) {
+    where.push('LOWER(cp.campaign_name) LIKE ?')
+    bindings.push(`%${keyword}%`)
+  }
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT
+       cp.id, cp.media_id, m.media_name, cp.campaign_name,
+       cp.is_active, cp.created_at, cp.updated_at
+     FROM campaigns cp
+     LEFT JOIN media_master m ON cp.media_id = m.id
+     WHERE ${where.join(' AND ')}
+     ORDER BY cp.campaign_name ASC
+     LIMIT 300`
+  )
+    .bind(...bindings)
+    .all<{
+      id: number
+      media_id: number
+      media_name: string
+      campaign_name: string
+      is_active: number
+      created_at: string
+      updated_at: string
+    }>()
+
+  return c.json<ApiResponse<typeof results>>({
+    success: true,
+    data: results,
+  })
+})
+
+// ------------------------------------------------------------
+// 媒体キャンペーン手動追加: POST /api/campaign/campaigns
+// ------------------------------------------------------------
+campaignRoute.post('/campaigns', async (c) => {
+  try {
+    const body = await c.req.json<{ media_id?: number; campaign_name?: string }>()
+    const mediaId = parsePositiveInteger(body.media_id)
+    const campaignName = body.campaign_name?.trim()
+
+    if (!mediaId) throw new Error('媒体を選択してください')
+    if (!campaignName) throw new Error('キャンペーン名を入力してください')
+
+    const ids = await ensureCampaignsByNames(c.env.DB, mediaId, [campaignName])
+    const id = ids[0]
+    if (!id) throw new Error('キャンペーンの保存に失敗しました')
+
+    const campaign = await c.env.DB.prepare(
+      `SELECT
+         cp.id, cp.media_id, m.media_name, cp.campaign_name,
+         cp.is_active, cp.created_at, cp.updated_at
+       FROM campaigns cp
+       LEFT JOIN media_master m ON cp.media_id = m.id
+       WHERE cp.id = ?`
+    )
+      .bind(id)
+      .first<{
+        id: number
+        media_id: number
+        media_name: string
+        campaign_name: string
+        is_active: number
+        created_at: string
+        updated_at: string
+      }>()
+
+    return c.json<ApiResponse<typeof campaign>>({
+      success: true,
+      data: campaign,
+    })
+  } catch (err) {
+    return c.json<ApiResponse<null>>(
+      { success: false, error: err instanceof Error ? err.message : 'キャンペーンの保存に失敗しました' },
+      400
+    )
+  }
 })
 
 // ------------------------------------------------------------
@@ -605,29 +823,47 @@ campaignRoute.post('/bulk-import', async (c) => {
 
 // ------------------------------------------------------------
 // 新規追加: POST /api/campaign
-// body: { campaign_name, media_id, ad_code, site_id, is_active }
+// body: { media_id, ad_code, site_ids, campaign_ids, campaign_names, is_active }
 // ------------------------------------------------------------
 campaignRoute.post('/', async (c) => {
   let createdCampaignId: number | null = null
 
   try {
     const body = await c.req.json<{
-    campaign_name: string
-    media_id: number
-    ad_code?: string
-    site_id?: number
-    site_ids?: number[]
-    is_active?: number
-  }>()
+      campaign_name?: string
+      media_id: number
+      ad_code?: string
+      site_id?: number
+      site_ids?: number[]
+      campaign_ids?: number[]
+      campaign_names?: string[]
+      is_active?: number
+    }>()
     const siteIds = normalizeSiteIds(body.site_ids ?? body.site_id)
+    const campaignIdsFromBody = Array.isArray(body.campaign_ids)
+      ? body.campaign_ids.map(parsePositiveInteger).filter((id): id is number => id !== null)
+      : []
+    const campaignNamesFromBody = Array.isArray(body.campaign_names)
+      ? body.campaign_names.map((name) => String(name ?? '').trim()).filter(Boolean)
+      : splitCampaignNames(body.campaign_name ?? '')
 
-    if (!body.campaign_name || body.campaign_name.trim() === '') {
-      throw new Error('キャンペーン名は必須です')
-    }
     if (!body.media_id) {
       throw new Error('媒体の選択は必須です')
     }
+    if (!body.ad_code || body.ad_code.trim() === '') {
+      throw new Error('広告コードは必須です')
+    }
+    await ensureAdCodeIsUnique(c.env.DB, body.ad_code)
     await ensureSitesExist(c.env.DB, siteIds)
+
+    const existingCampaigns = await fetchCampaignsByIds(c.env.DB, body.media_id, campaignIdsFromBody)
+    const campaignNames = [
+      ...campaignNamesFromBody,
+      ...existingCampaigns.map((campaign) => campaign.campaign_name),
+    ]
+    const createdCampaignIds = await ensureCampaignsByNames(c.env.DB, body.media_id, campaignNames)
+    const campaignIds = [...new Set([...existingCampaigns.map((campaign) => campaign.id), ...createdCampaignIds])]
+    const legacyCampaignName = campaignNames[0] ?? ''
 
     const result = await c.env.DB.prepare(
       `INSERT INTO campaign_master
@@ -635,7 +871,7 @@ campaignRoute.post('/', async (c) => {
        VALUES (?, ?, ?, ?, ?)`
     )
       .bind(
-        body.campaign_name.trim(),
+        legacyCampaignName,
         body.media_id,
         body.ad_code?.trim() ?? null,
         siteIds[0],
@@ -647,6 +883,7 @@ campaignRoute.post('/', async (c) => {
     if (!createdCampaignId) throw new Error('広告コードの作成に失敗しました')
 
     await replaceAdCodeSites(c.env.DB, createdCampaignId, siteIds)
+    await replaceAdCodeCampaigns(c.env.DB, createdCampaignId, campaignIds)
     await backfillMediaSummaryMediaId(c.env.DB, body.ad_code)
 
     return c.json<ApiResponse<{ id: number | null }>>({
@@ -656,7 +893,9 @@ campaignRoute.post('/', async (c) => {
   } catch (err) {
     if (createdCampaignId) {
       await c.env.DB.batch([
+        c.env.DB.prepare('DELETE FROM ad_code_campaigns WHERE ad_code_id = ?').bind(createdCampaignId),
         c.env.DB.prepare('DELETE FROM ad_code_sites WHERE ad_code_id = ?').bind(createdCampaignId),
+        c.env.DB.prepare('DELETE FROM campaign_group_ad_codes WHERE ad_code_id = ?').bind(createdCampaignId),
         c.env.DB.prepare('DELETE FROM campaign_master WHERE id = ?').bind(createdCampaignId),
       ])
     }
@@ -677,22 +916,40 @@ campaignRoute.put('/:id', async (c) => {
     if (!id) throw new Error('広告コードIDが正しくありません')
 
     const body = await c.req.json<{
-      campaign_name: string
+      campaign_name?: string
       media_id: number
       ad_code?: string
       site_id?: number
       site_ids?: number[]
+      campaign_ids?: number[]
+      campaign_names?: string[]
       is_active?: number
     }>()
     const siteIds = normalizeSiteIds(body.site_ids ?? body.site_id)
+    const campaignIdsFromBody = Array.isArray(body.campaign_ids)
+      ? body.campaign_ids.map(parsePositiveInteger).filter((campaignId): campaignId is number => campaignId !== null)
+      : []
+    const campaignNamesFromBody = Array.isArray(body.campaign_names)
+      ? body.campaign_names.map((name) => String(name ?? '').trim()).filter(Boolean)
+      : splitCampaignNames(body.campaign_name ?? '')
 
-    if (!body.campaign_name || body.campaign_name.trim() === '') {
-      throw new Error('キャンペーン名は必須です')
-    }
     if (!body.media_id) {
       throw new Error('媒体の選択は必須です')
     }
+    if (!body.ad_code || body.ad_code.trim() === '') {
+      throw new Error('広告コードは必須です')
+    }
+    await ensureAdCodeIsUnique(c.env.DB, body.ad_code, id)
     await ensureSitesExist(c.env.DB, siteIds)
+
+    const existingCampaigns = await fetchCampaignsByIds(c.env.DB, body.media_id, campaignIdsFromBody)
+    const campaignNames = [
+      ...campaignNamesFromBody,
+      ...existingCampaigns.map((campaign) => campaign.campaign_name),
+    ]
+    const createdCampaignIds = await ensureCampaignsByNames(c.env.DB, body.media_id, campaignNames)
+    const campaignIds = [...new Set([...existingCampaigns.map((campaign) => campaign.id), ...createdCampaignIds])]
+    const legacyCampaignName = campaignNames[0] ?? ''
 
     await c.env.DB.prepare(
       `UPDATE campaign_master
@@ -701,7 +958,7 @@ campaignRoute.put('/:id', async (c) => {
        WHERE id = ?`
     )
       .bind(
-        body.campaign_name.trim(),
+        legacyCampaignName,
         body.media_id,
         body.ad_code?.trim() ?? null,
         siteIds[0],
@@ -711,6 +968,7 @@ campaignRoute.put('/:id', async (c) => {
       .run()
 
     await replaceAdCodeSites(c.env.DB, id, siteIds)
+    await replaceAdCodeCampaigns(c.env.DB, id, campaignIds)
     await backfillMediaSummaryMediaId(c.env.DB, body.ad_code)
 
     return c.json<ApiResponse<null>>({ success: true })
@@ -729,7 +987,9 @@ campaignRoute.delete('/:id', async (c) => {
   const id = c.req.param('id')
 
   await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM ad_code_campaigns WHERE ad_code_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM ad_code_sites WHERE ad_code_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM campaign_group_ad_codes WHERE ad_code_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM campaign_master WHERE id = ?').bind(id),
   ])
 

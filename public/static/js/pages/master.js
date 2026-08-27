@@ -544,10 +544,10 @@ function renderCampaignTable(list) {
       (c) => `
       <tr>
         <td>${c.id}</td>
-        <td>${escapeHtml(c.campaign_name)}</td>
-        <td>${escapeHtml(c.media_name || '-')}</td>
         <td>${escapeHtml(c.ad_code || '-')}</td>
+        <td>${escapeHtml(c.media_name || '-')}</td>
         <td title="${escapeHtml(c.site_names || c.site_name || '-')}">${escapeHtml(formatCampaignSiteLabel(c))}</td>
+        <td title="${escapeHtml(c.campaign_names || c.campaign_name || '-')}">${escapeHtml(formatCampaignUsageLabel(c))}</td>
         <td><span class="badge ${c.is_active ? 'badge-active' : 'badge-inactive'}">${c.is_active ? '有効' : '無効'}</span></td>
         <td>
           <div class="action-btn-group">
@@ -565,7 +565,7 @@ function renderCampaignTable(list) {
       <table class="data-table">
         <thead>
           <tr>
-            <th>ID</th><th>キャンペーン名</th><th>媒体</th><th>広告コード</th><th>サイト</th><th>状態</th><th style="width:100px">操作</th>
+            <th>ID</th><th>広告コード</th><th>媒体</th><th>サイト</th><th>使用キャンペーン</th><th>状態</th><th style="width:100px">操作</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -600,7 +600,14 @@ function openCampaignModal(root, item, mediaList, siteList) {
   let selectedSites = getCampaignSiteIds(item)
     .map((siteId) => siteList.find((site) => Number(site.id) === Number(siteId)))
     .filter(Boolean)
+  let selectedCampaigns = getCampaignIds(item).map((campaignId) => ({
+    id: campaignId,
+    campaign_name: findCampaignNameByIndex(item, campaignId),
+    media_id: item?.media_id,
+  })).filter((campaign) => campaign.campaign_name)
+  let campaignCandidates = []
   let siteSearchText = ''
+  let campaignSearchText = ''
 
   const mediaOptions = mediaList
     .map((m) => `<option value="${m.id}" ${isEdit && item.media_id === m.id ? 'selected' : ''}>${escapeHtml(m.media_name)}</option>`)
@@ -608,10 +615,11 @@ function openCampaignModal(root, item, mediaList, siteList) {
 
   showModal({
     title: isEdit ? '広告コードを編集' : '広告コードを追加',
+    modalClass: 'modal-box-wide',
     bodyHtml: `
       <div class="form-row">
-        <label class="form-label">キャンペーン名</label>
-        <input type="text" id="modal-campaign-name" class="form-input" value="${isEdit ? escapeHtml(item.campaign_name) : ''}" placeholder="例 新規獲得検索広告" />
+        <label class="form-label">広告コード</label>
+        <input type="text" id="modal-campaign-adcode" class="form-input" value="${isEdit ? escapeHtml(item.ad_code || '') : ''}" placeholder="例 tabb002" />
       </div>
       <div class="form-row">
         <label class="form-label">媒体</label>
@@ -621,16 +629,26 @@ function openCampaignModal(root, item, mediaList, siteList) {
         </select>
       </div>
       <div class="form-row">
-        <label class="form-label">広告コード</label>
-        <input type="text" id="modal-campaign-adcode" class="form-input" value="${isEdit ? escapeHtml(item.ad_code || '') : ''}" placeholder="例 GAD-001" />
-      </div>
-      <div class="form-row">
         <label class="form-label">サイト</label>
         <div class="campaign-ad-code-picker">
           <input type="search" id="modal-campaign-site-search" class="form-input" placeholder="サイト名で検索" />
           <div id="modal-campaign-selected-sites" class="selected-chip-list"></div>
           <div id="modal-campaign-site-list" class="ad-code-choice-list"></div>
           <div class="form-hint">1つの広告コードに複数サイトを紐付けできます。</div>
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="form-label">使用キャンペーン</label>
+        <div class="campaign-ad-code-picker">
+          <div class="campaign-picker-actions">
+            <input type="search" id="modal-campaign-usage-search" class="form-input" placeholder="キャンペーン名で検索" />
+            <button type="button" class="btn btn-secondary btn-sm" id="modal-campaign-add-usage">
+              <i class="fa-solid fa-plus"></i>新しいキャンペーンを追加
+            </button>
+          </div>
+          <div id="modal-campaign-selected-usages" class="selected-chip-list"></div>
+          <div id="modal-campaign-usage-list" class="ad-code-choice-list"></div>
+          <div class="form-hint">媒体を選択すると、その媒体のキャンペーンだけ表示します。</div>
         </div>
       </div>
       <div class="form-row inline">
@@ -642,29 +660,29 @@ function openCampaignModal(root, item, mediaList, siteList) {
       </div>
     `,
     onConfirm: async () => {
-      const name = document.getElementById('modal-campaign-name').value.trim()
       const mediaId = document.getElementById('modal-campaign-media').value
       const adCode = document.getElementById('modal-campaign-adcode').value.trim()
       const siteIds = selectedSites.map((site) => Number(site.id))
+      const campaignIds = selectedCampaigns.map((campaign) => Number(campaign.id))
       const isActive = Number(document.getElementById('modal-campaign-active').value)
 
-      if (!name || !mediaId || siteIds.length === 0) {
-        showToast('キャンペーン名・媒体・サイトは必須です', 'error')
+      if (!adCode || !mediaId || siteIds.length === 0) {
+        showToast('広告コード・媒体・サイトは必須です', 'error')
         return
       }
 
       const payload = {
-        campaign_name: name,
         media_id: Number(mediaId),
         ad_code: adCode,
         site_id: siteIds[0],
         site_ids: siteIds,
+        campaign_ids: campaignIds,
         is_active: isActive,
       }
 
       const res = isEdit
-        ? await axios.put(`/api/campaign/${item.id}`, payload).then((r) => r.data).catch((e) => e.response.data)
-        : await axios.post('/api/campaign', payload).then((r) => r.data).catch((e) => e.response.data)
+        ? await axios.put(`/api/campaign/${item.id}`, payload).then((r) => r.data).catch((e) => e.response?.data || { success: false })
+        : await axios.post('/api/campaign', payload).then((r) => r.data).catch((e) => e.response?.data || { success: false })
 
       if (res.success) {
         closeModal()
@@ -677,9 +695,35 @@ function openCampaignModal(root, item, mediaList, siteList) {
   })
 
   const modal = document.getElementById('active-modal-overlay')
-  const searchInput = modal.querySelector('#modal-campaign-site-search')
-  const listRoot = modal.querySelector('#modal-campaign-site-list')
-  const chipsRoot = modal.querySelector('#modal-campaign-selected-sites')
+  const mediaSelect = modal.querySelector('#modal-campaign-media')
+  const siteSearchInput = modal.querySelector('#modal-campaign-site-search')
+  const siteListRoot = modal.querySelector('#modal-campaign-site-list')
+  const siteChipsRoot = modal.querySelector('#modal-campaign-selected-sites')
+  const campaignSearchInput = modal.querySelector('#modal-campaign-usage-search')
+  const campaignListRoot = modal.querySelector('#modal-campaign-usage-list')
+  const campaignChipsRoot = modal.querySelector('#modal-campaign-selected-usages')
+  const addCampaignButton = modal.querySelector('#modal-campaign-add-usage')
+
+  async function loadCampaignCandidates() {
+    const mediaId = Number(mediaSelect.value)
+    if (!mediaId) {
+      campaignCandidates = []
+      selectedCampaigns = []
+      renderCampaignPicker()
+      return
+    }
+
+    selectedCampaigns = selectedCampaigns.filter((campaign) => Number(campaign.media_id) === mediaId)
+    const res = await axios.get('/api/campaign/campaigns', { params: { media_id: mediaId } })
+      .then((r) => r.data)
+      .catch(() => ({ success: false, data: [] }))
+    campaignCandidates = res.success ? res.data || [] : []
+    selectedCampaigns = selectedCampaigns.map((selected) => {
+      const fresh = campaignCandidates.find((candidate) => Number(candidate.id) === Number(selected.id))
+      return fresh || selected
+    })
+    renderCampaignPicker()
+  }
 
   function renderSitePicker() {
     const selectedIds = new Set(selectedSites.map((site) => Number(site.id)))
@@ -688,7 +732,7 @@ function openCampaignModal(root, item, mediaList, siteList) {
       !keyword || String(site.site_name || '').toLowerCase().includes(keyword)
     )
 
-    chipsRoot.innerHTML = selectedSites.length === 0
+    siteChipsRoot.innerHTML = selectedSites.length === 0
       ? `<div class="form-hint">サイトは未選択です</div>`
       : selectedSites.map((site) => `
         <button type="button" class="selected-chip" data-id="${site.id}">
@@ -696,7 +740,7 @@ function openCampaignModal(root, item, mediaList, siteList) {
         </button>
       `).join('')
 
-    listRoot.innerHTML = filteredSites.length === 0
+    siteListRoot.innerHTML = filteredSites.length === 0
       ? `<div class="empty-state compact">選択できるサイトがありません</div>`
       : filteredSites.map((site) => {
         const selected = selectedIds.has(Number(site.id))
@@ -711,13 +755,13 @@ function openCampaignModal(root, item, mediaList, siteList) {
         `
       }).join('')
 
-    chipsRoot.querySelectorAll('.selected-chip').forEach((chip) => {
+    siteChipsRoot.querySelectorAll('.selected-chip').forEach((chip) => {
       chip.addEventListener('click', () => {
         selectedSites = selectedSites.filter((site) => Number(site.id) !== Number(chip.dataset.id))
         renderSitePicker()
       })
     })
-    listRoot.querySelectorAll('.ad-code-choice').forEach((choice) => {
+    siteListRoot.querySelectorAll('.ad-code-choice').forEach((choice) => {
       choice.addEventListener('click', () => {
         const id = Number(choice.dataset.id)
         const exists = selectedSites.some((site) => Number(site.id) === id)
@@ -732,12 +776,105 @@ function openCampaignModal(root, item, mediaList, siteList) {
     })
   }
 
-  searchInput.addEventListener('input', () => {
-    siteSearchText = searchInput.value
+  function renderCampaignPicker() {
+    const selectedIds = new Set(selectedCampaigns.map((campaign) => Number(campaign.id)))
+    const keyword = campaignSearchText.trim().toLowerCase()
+    const filtered = campaignCandidates.filter((campaign) =>
+      !keyword || String(campaign.campaign_name || '').toLowerCase().includes(keyword)
+    )
+
+    campaignChipsRoot.innerHTML = selectedCampaigns.length === 0
+      ? `<div class="form-hint">使用キャンペーンは未選択です</div>`
+      : selectedCampaigns.map((campaign) => `
+        <button type="button" class="selected-chip" data-id="${campaign.id}">
+          ${escapeHtml(campaign.campaign_name || '-')} <span>×</span>
+        </button>
+      `).join('')
+
+    campaignListRoot.innerHTML = !Number(mediaSelect.value)
+      ? `<div class="empty-state compact">媒体を選択してください</div>`
+      : filtered.length === 0
+        ? `<div class="empty-state compact">該当するキャンペーンがありません</div>`
+        : filtered.map((campaign) => {
+          const selected = selectedIds.has(Number(campaign.id))
+          return `
+            <button type="button" class="ad-code-choice ${selected ? 'selected' : ''}" data-id="${campaign.id}">
+              <span class="ad-code-check"><i class="fa-solid ${selected ? 'fa-check' : 'fa-plus'}"></i></span>
+              <span>
+                <strong>${escapeHtml(campaign.campaign_name || '-')}</strong>
+                <small>${escapeHtml(campaign.media_name || '')}</small>
+              </span>
+            </button>
+          `
+        }).join('')
+
+    campaignChipsRoot.querySelectorAll('.selected-chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        selectedCampaigns = selectedCampaigns.filter((campaign) => Number(campaign.id) !== Number(chip.dataset.id))
+        renderCampaignPicker()
+      })
+    })
+    campaignListRoot.querySelectorAll('.ad-code-choice').forEach((choice) => {
+      choice.addEventListener('click', () => {
+        const id = Number(choice.dataset.id)
+        const exists = selectedCampaigns.some((campaign) => Number(campaign.id) === id)
+        if (exists) {
+          selectedCampaigns = selectedCampaigns.filter((campaign) => Number(campaign.id) !== id)
+        } else {
+          const campaign = campaignCandidates.find((candidate) => Number(candidate.id) === id)
+          if (campaign) selectedCampaigns = [...selectedCampaigns, campaign]
+        }
+        renderCampaignPicker()
+      })
+    })
+  }
+
+  siteSearchInput.addEventListener('input', () => {
+    siteSearchText = siteSearchInput.value
     renderSitePicker()
   })
 
+  campaignSearchInput.addEventListener('input', () => {
+    campaignSearchText = campaignSearchInput.value
+    renderCampaignPicker()
+  })
+
+  mediaSelect.addEventListener('change', () => {
+    campaignSearchText = ''
+    campaignSearchInput.value = ''
+    loadCampaignCandidates()
+  })
+
+  addCampaignButton.addEventListener('click', async () => {
+    const mediaId = Number(mediaSelect.value)
+    if (!mediaId) {
+      showToast('先に媒体を選択してください', 'error')
+      return
+    }
+
+    const campaignName = window.prompt('追加するキャンペーン名を入力してください')
+    if (!campaignName || !campaignName.trim()) return
+
+    const res = await axios.post('/api/campaign/campaigns', {
+      media_id: mediaId,
+      campaign_name: campaignName.trim(),
+    }).then((r) => r.data).catch((e) => e.response?.data || { success: false })
+
+    if (res.success && res.data) {
+      const campaign = res.data
+      selectedCampaigns = [
+        ...selectedCampaigns.filter((item) => Number(item.id) !== Number(campaign.id)),
+        campaign,
+      ]
+      await loadCampaignCandidates()
+      showToast('キャンペーンを追加しました', 'success')
+    } else {
+      showToast(res.error || 'キャンペーンの追加に失敗しました', 'error')
+    }
+  })
+
   renderSitePicker()
+  loadCampaignCandidates()
 }
 
 function getCampaignSiteIds(item) {
@@ -756,6 +893,34 @@ function formatCampaignSiteLabel(item) {
   const count = Number(item.site_count || getCampaignSiteIds(item).length || 0)
   if (count > 1) return `${count.toLocaleString('ja-JP')}サイト`
   return item.site_name || '-'
+}
+
+function formatCampaignUsageLabel(item) {
+  const count = Number(item.campaign_count || getCampaignIds(item).length || 0)
+  if (count > 1) return `${count.toLocaleString('ja-JP')}キャンペーン`
+  return item.campaign_names || item.campaign_name || '未設定'
+}
+
+function getCampaignIds(item) {
+  if (!item) return []
+  if (Array.isArray(item.campaign_ids)) return item.campaign_ids.map(Number).filter((id) => Number.isInteger(id) && id > 0)
+  if (typeof item.campaign_ids === 'string') {
+    return item.campaign_ids
+      .split(',')
+      .map((id) => Number(id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  }
+  return []
+}
+
+function findCampaignNameByIndex(item, campaignId) {
+  const ids = getCampaignIds(item)
+  const names = String(item?.campaign_names || item?.campaign_name || '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean)
+  const index = ids.findIndex((id) => Number(id) === Number(campaignId))
+  return names[index] || names[0] || ''
 }
 
 function downloadCampaignTemplate() {
@@ -1055,17 +1220,17 @@ function renderCampaignBulkPreview(data, { root, summaryRoot, showErrorsOnly, fi
       <table class="data-table campaign-bulk-table">
         <thead>
           <tr>
-            <th>行</th><th>キャンペーン名</th><th>媒体</th><th>広告コード</th><th>サイト</th><th>状態</th><th>判定</th><th>エラー/理由</th>
+            <th>行</th><th>広告コード</th><th>媒体</th><th>サイト</th><th>使用キャンペーン</th><th>状態</th><th>判定</th><th>エラー/理由</th>
           </tr>
         </thead>
         <tbody>
           ${displayRows.map((row) => `
             <tr class="${row.judgement === 'エラー' ? 'campaign-bulk-row-error' : row.judgement === 'スキップ' ? 'campaign-bulk-row-skip' : ''}">
               <td>${Number(row.row_number).toLocaleString('ja-JP')}</td>
-              <td>${escapeHtml(row.campaign_name || '-')}</td>
-              <td>${escapeHtml(row.media || '-')}</td>
               <td>${escapeHtml(row.ad_code || '-')}</td>
+              <td>${escapeHtml(row.media || '-')}</td>
               <td>${escapeHtml((row.site_names && row.site_names.length > 0 ? row.site_names.join('、') : row.sites) || '-')}</td>
+              <td>${escapeHtml((row.campaign_names || []).join('、') || '-')}</td>
               <td>${escapeHtml(row.status || '有効')}</td>
               <td>${renderCampaignBulkBadge(row.judgement)}</td>
               <td>${escapeHtml((row.errors || []).join(' / ') || '-')}</td>
@@ -1103,13 +1268,13 @@ function hasCampaignBulkResultRows(data) {
 function downloadCampaignBulkResultCsv(rows, fileName) {
   const targetRows = rows.filter((row) => row.judgement === 'エラー' || row.judgement === 'スキップ')
   const csvRows = [
-    ['行番号', 'キャンペーン名', '媒体', '広告コード', 'サイト', '状態', '判定', 'エラー/理由'],
+    ['行番号', '広告コード', '媒体', 'サイト', '使用キャンペーン', '状態', '判定', 'エラー/理由'],
     ...targetRows.map((row) => [
       row.row_number,
-      row.campaign_name,
-      row.media,
       row.ad_code,
+      row.media,
       row.sites,
+      (row.campaign_names || []).join('、'),
       row.status,
       row.judgement,
       (row.errors || []).join(' / '),
@@ -1306,7 +1471,7 @@ async function openCampaignGroupModal(root, group, mediaList) {
       <div class="form-row">
         <label class="form-label">広告コード選択</label>
         <div class="campaign-ad-code-picker">
-          <input type="search" id="campaign-group-ad-code-search" class="form-input" placeholder="広告コード・キャンペーン名・サイト名で検索" />
+          <input type="search" id="campaign-group-ad-code-search" class="form-input" placeholder="広告コード・サイト名で検索" />
           <div id="campaign-group-selected-chips" class="selected-chip-list"></div>
           <div id="campaign-group-ad-code-list" class="ad-code-choice-list"></div>
           <div class="form-hint">既に他のキャンペーングループへ所属している広告コードは候補に表示されません。</div>
@@ -1354,7 +1519,7 @@ async function openCampaignGroupModal(root, group, mediaList) {
     const selectedIds = new Set(selectedAdCodes.map((item) => Number(item.id)))
     const keyword = searchText.trim().toLowerCase()
     const filtered = availableAdCodes.filter((item) => {
-      const haystack = `${item.ad_code || ''} ${item.campaign_name || ''} ${item.site_name || ''} ${item.site_names || ''}`.toLowerCase()
+      const haystack = `${item.ad_code || ''} ${item.site_name || ''} ${item.site_names || ''}`.toLowerCase()
       return !keyword || haystack.includes(keyword)
     })
 
@@ -1377,7 +1542,7 @@ async function openCampaignGroupModal(root, group, mediaList) {
               <span class="ad-code-check"><i class="fa-solid ${selected ? 'fa-check' : 'fa-plus'}"></i></span>
               <span>
                 <strong>${escapeHtml(item.ad_code || '-')}</strong>
-                <small>${escapeHtml(item.campaign_name || '-')} / ${escapeHtml(item.site_names || item.site_name || '-')}</small>
+                <small>サイト：${escapeHtml(formatCampaignSiteLabel(item))} / キャンペーン：${Number(item.campaign_count || 0).toLocaleString('ja-JP')}件</small>
               </span>
             </button>
           `

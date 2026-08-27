@@ -1647,6 +1647,13 @@ button {
   gap: 10px;
 }
 
+.campaign-picker-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
 .selected-chip-list {
   min-height: 34px;
   display: flex;

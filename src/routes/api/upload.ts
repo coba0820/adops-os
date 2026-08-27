@@ -107,7 +107,7 @@ type TargetDateRange = {
 }
 
 type UploadWarning = {
-  type: 'unregistered_ad_codes'
+  type: 'unregistered_ad_codes' | 'auto_registered_ad_codes'
   message: string
   count: number
   ad_codes: string[]
@@ -796,6 +796,207 @@ function uniqueStrings(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
 }
 
+async function fetchRowsByTextKey<T extends Record<string, unknown>>(
+  db: D1Database,
+  tableName: string,
+  keyColumn: string,
+  values: string[],
+  selectSql: string
+) {
+  const uniqueValues = uniqueStrings(values)
+  const rows: T[] = []
+
+  for (let i = 0; i < uniqueValues.length; i += LOOKUP_BATCH_SIZE) {
+    const chunk = uniqueValues.slice(i, i + LOOKUP_BATCH_SIZE)
+    if (chunk.length === 0) continue
+
+    const placeholders = chunk.map(() => '?').join(', ')
+    const { results } = await db.prepare(
+      `${selectSql}
+       FROM ${tableName}
+       WHERE ${keyColumn} IN (${placeholders})`
+    )
+      .bind(...chunk)
+      .all<T>()
+
+    rows.push(...results)
+  }
+
+  return rows
+}
+
+async function getOrCreateUnspecifiedMediaId(db: D1Database) {
+  const existing = await db.prepare(
+    `SELECT id
+     FROM media_master
+     WHERE media_name = '未設定'
+     ORDER BY id ASC
+     LIMIT 1`
+  ).first<{ id: number }>()
+
+  if (existing?.id) return existing.id
+
+  const result = await db.prepare(
+    `INSERT INTO media_master
+       (media_name, status, currency)
+     VALUES ('未設定', 'paused', 'JPY')`
+  ).run()
+
+  const id = result.meta.last_row_id ?? null
+  if (!id) throw new Error('未設定媒体の作成に失敗しました')
+  return id
+}
+
+async function ensureSitesByNames(db: D1Database, siteNames: string[]) {
+  const uniqueSiteNames = uniqueStrings(siteNames)
+  const siteByName = new Map<string, { id: number; site_name: string }>()
+
+  const existingSites = await fetchRowsByTextKey<{ id: number; site_name: string }>(
+    db,
+    'site_master',
+    'site_name',
+    uniqueSiteNames,
+    'SELECT id, site_name'
+  )
+  existingSites.forEach((site) => siteByName.set(site.site_name, site))
+
+  for (const siteName of uniqueSiteNames) {
+    if (siteByName.has(siteName)) continue
+
+    const result = await db.prepare(
+      `INSERT INTO site_master
+         (site_name)
+       VALUES (?)`
+    )
+      .bind(siteName)
+      .run()
+
+    const id = result.meta.last_row_id ?? null
+    if (id) siteByName.set(siteName, { id, site_name: siteName })
+  }
+
+  return siteByName
+}
+
+async function ensureAdCodesAndSitesFromSiteRows(
+  db: D1Database,
+  rows: Array<{ adCode: string; siteName: string }>
+) {
+  const siteRows = rows
+    .map((row) => ({
+      adCode: row.adCode.trim(),
+      siteName: row.siteName.trim(),
+    }))
+    .filter((row) => row.adCode && row.siteName)
+
+  if (siteRows.length === 0) {
+    return {
+      createdAdCodes: [] as string[],
+      linkedPairCount: 0,
+    }
+  }
+
+  const siteByName = await ensureSitesByNames(db, siteRows.map((row) => row.siteName))
+  const adCodeByCode = new Map<string, { id: number; ad_code: string; media_id: number }>()
+  const existingAdCodes = await fetchRowsByTextKey<{ id: number; ad_code: string; media_id: number }>(
+    db,
+    'campaign_master',
+    'ad_code',
+    siteRows.map((row) => row.adCode),
+    'SELECT id, ad_code, media_id'
+  )
+  existingAdCodes.forEach((row) => {
+    const key = row.ad_code?.trim()
+    if (key && !adCodeByCode.has(key)) adCodeByCode.set(key, row)
+  })
+
+  const firstSiteByAdCode = new Map<string, number>()
+  for (const row of siteRows) {
+    const site = siteByName.get(row.siteName)
+    if (site && !firstSiteByAdCode.has(row.adCode)) {
+      firstSiteByAdCode.set(row.adCode, site.id)
+    }
+  }
+
+  const createdAdCodes: string[] = []
+  const missingAdCodes = uniqueStrings(siteRows.map((row) => row.adCode))
+    .filter((adCode) => !adCodeByCode.has(adCode))
+  let unspecifiedMediaId: number | null = null
+
+  for (const adCode of missingAdCodes) {
+    const siteId = firstSiteByAdCode.get(adCode)
+    if (!siteId) continue
+    if (!unspecifiedMediaId) unspecifiedMediaId = await getOrCreateUnspecifiedMediaId(db)
+
+    const result = await db.prepare(
+      `INSERT INTO campaign_master
+         (campaign_name, media_id, ad_code, site_id, is_active)
+       VALUES ('', ?, ?, ?, 1)`
+    )
+      .bind(unspecifiedMediaId, adCode, siteId)
+      .run()
+
+    const id = result.meta.last_row_id ?? null
+    if (id) {
+      adCodeByCode.set(adCode, { id, ad_code: adCode, media_id: unspecifiedMediaId })
+      createdAdCodes.push(adCode)
+    }
+  }
+
+  const pairKeys = new Set<string>()
+  const statements: D1PreparedStatement[] = []
+  for (const row of siteRows) {
+    const adCode = adCodeByCode.get(row.adCode)
+    const site = siteByName.get(row.siteName)
+    if (!adCode || !site) continue
+
+    const key = `${adCode.id}:${site.id}`
+    if (pairKeys.has(key)) continue
+    pairKeys.add(key)
+
+    statements.push(
+      db.prepare(
+        `INSERT OR IGNORE INTO ad_code_sites
+           (ad_code_id, site_id)
+         VALUES (?, ?)`
+      )
+        .bind(adCode.id, site.id)
+    )
+  }
+
+  for (let i = 0; i < statements.length; i += INSERT_BATCH_SIZE) {
+    await db.batch(statements.slice(i, i + INSERT_BATCH_SIZE))
+  }
+
+  return {
+    createdAdCodes,
+    linkedPairCount: pairKeys.size,
+  }
+}
+
+async function ensureCampaignsFromAdMediaRows(
+  db: D1Database,
+  mediaId: number,
+  rows: AdMediaDailyRow[]
+) {
+  const campaignNames = uniqueStrings(rows.map((row) => row.campaignName))
+  for (let i = 0; i < campaignNames.length; i += LOOKUP_BATCH_SIZE) {
+    const chunk = campaignNames.slice(i, i + LOOKUP_BATCH_SIZE)
+    await db.batch(
+      chunk.map((campaignName) =>
+        db.prepare(
+          `INSERT OR IGNORE INTO campaigns
+             (media_id, campaign_name, is_active)
+           VALUES (?, ?, 1)`
+        )
+          .bind(mediaId, campaignName)
+      )
+    )
+  }
+
+  return campaignNames.length
+}
+
 async function deleteOldAdMediaRowsInRange(
   db: D1Database,
   mediaId: number,
@@ -1072,6 +1273,13 @@ async function buildMediaSummaryDailyRows(
     ? MediaSummaryParser.internalParser(headerIndex, bodyRows, uploadHistoryId, dataSource)
     : MediaSummaryParser.ynsParser(headerIndex, bodyRows, uploadHistoryId, dataSource)
 
+  const autoRegistration = await ensureAdCodesAndSitesFromSiteRows(db, parsedRows)
+  logUploadInfo('media_summary ad_code/site auto registration completed', {
+    parserType,
+    createdAdCodes: autoRegistration.createdAdCodes,
+    linkedPairCount: autoRegistration.linkedPairCount,
+  })
+
   const mediaIdsByAdCode = await resolveMediaIdsByAdCode(
     db,
     parsedRows.map((row) => row.adCode)
@@ -1120,6 +1328,13 @@ async function buildPaymentReportDailyRows(
   const parsedRows = parserType === 'internal'
     ? PaymentReportParser.internalParser(headerIndex, bodyRows, uploadHistoryId, dataSource)
     : PaymentReportParser.ynsParser(headerIndex, bodyRows, uploadHistoryId, dataSource)
+
+  const autoRegistration = await ensureAdCodesAndSitesFromSiteRows(db, parsedRows)
+  logUploadInfo('payment_report ad_code/site auto registration completed', {
+    parserType,
+    createdAdCodes: autoRegistration.createdAdCodes,
+    linkedPairCount: autoRegistration.linkedPairCount,
+  })
 
   const mediaIdsByAdCode = await resolveMediaIdsByAdCode(
     db,
@@ -1500,6 +1715,16 @@ uploadRoute.post('/', async (c) => {
       if (preparedAdMediaRows.length === 0) {
         throw new Error('広告媒体CSVに保存対象の明細行がありません')
       }
+
+      const registeredCampaignCount = await ensureCampaignsFromAdMediaRows(
+        c.env.DB,
+        mediaId,
+        preparedAdMediaRows
+      )
+      logUploadInfo('ad media campaigns auto registration completed', {
+        mediaId,
+        registeredCampaignCount,
+      })
     }
 
     if (fileType === 'site_summary_csv') {
@@ -1555,7 +1780,7 @@ uploadRoute.post('/', async (c) => {
             `ただし、未登録の広告コードが${unlinkedPaymentAdCodes.length}件ありました。`,
             '',
             'これらの広告コードは媒体を特定できないため取り込まれていません。',
-            '広告コードマスタへ登録後、再アップロードしてください。',
+            '広告コードマスタで媒体を設定後、再アップロードしてください。',
           ].join('\n'),
           count: unlinkedPaymentAdCodes.length,
           ad_codes: unlinkedPaymentAdCodes,

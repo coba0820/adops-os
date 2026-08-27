@@ -250,7 +250,18 @@ function actualRowsCte(hasPayment: boolean) {
           SELECT c.site_id
           FROM campaign_master c
           WHERE c.media_id = d.media_id
-            AND (c.campaign_name = d.campaign_name OR c.ad_code = d.campaign_id)
+            AND (
+              c.ad_code = d.campaign_id
+              OR c.campaign_name = d.campaign_name
+              OR EXISTS (
+                SELECT 1
+                FROM ad_code_campaigns acc
+                INNER JOIN campaigns cp ON acc.campaign_id = cp.id
+                WHERE acc.ad_code_id = c.id
+                  AND cp.media_id = d.media_id
+                  AND cp.campaign_name = d.campaign_name
+              )
+            )
           ORDER BY c.id ASC
           LIMIT 1
         ) AS site_id,
@@ -259,7 +270,18 @@ function actualRowsCte(hasPayment: boolean) {
           FROM campaign_master c
           LEFT JOIN site_master sm ON c.site_id = sm.id
           WHERE c.media_id = d.media_id
-            AND (c.campaign_name = d.campaign_name OR c.ad_code = d.campaign_id)
+            AND (
+              c.ad_code = d.campaign_id
+              OR c.campaign_name = d.campaign_name
+              OR EXISTS (
+                SELECT 1
+                FROM ad_code_campaigns acc
+                INNER JOIN campaigns cp ON acc.campaign_id = cp.id
+                WHERE acc.ad_code_id = c.id
+                  AND cp.media_id = d.media_id
+                  AND cp.campaign_name = d.campaign_name
+              )
+            )
           ORDER BY c.id ASC
           LIMIT 1
         ) AS site_name,
