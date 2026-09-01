@@ -332,6 +332,10 @@ function buildDateWhere(alias: string, filters: {
   }
 }
 
+function appendWhereCondition(whereSql: string, condition: string) {
+  return whereSql ? `${whereSql} AND ${condition}` : `WHERE ${condition}`
+}
+
 function buildGroupWhere(filters: {
   mediaId: number | null
   campaignGroupId: number | null
@@ -363,12 +367,39 @@ analysisRoute.get('/summary', async (c) => {
     const groupBy = parseGroupByParam(c.req.query('group_by') ?? null)
 
     const groupWhere = buildGroupWhere({ mediaId, campaignGroupId })
-    const adWhere = buildDateWhere('d', { startDate, endDate })
-    const summaryWhere = buildDateWhere('s', { startDate, endDate })
+    const adWhereBase = buildDateWhere('d', { startDate, endDate })
+    const summaryWhereBase = buildDateWhere('s', { startDate, endDate })
     const paymentWhereBase = buildDateWhere('p', { startDate, endDate }, 'registration_date')
     const adPeriodSql = getPeriodSql(groupBy, 'd')
     const summaryPeriodSql = getPeriodSql(groupBy, 's')
     const paymentPeriodSql = getPeriodSql(groupBy, 'p', 'registration_date')
+    const isCampaignGroupFiltered = campaignGroupId !== null
+    const directAdWhere = mediaId && !isCampaignGroupFiltered
+      ? {
+        whereSql: appendWhereCondition(adWhereBase.whereSql, 'd.media_id = ?'),
+        bindings: [...adWhereBase.bindings, mediaId],
+      }
+      : adWhereBase
+    const directSummaryWhere = mediaId && !isCampaignGroupFiltered
+      ? {
+        whereSql: appendWhereCondition(summaryWhereBase.whereSql, 'COALESCE(s.media_id, acm.media_id) = ?'),
+        bindings: [...summaryWhereBase.bindings, mediaId],
+      }
+      : summaryWhereBase
+    const directPaymentWhere = mediaId && !isCampaignGroupFiltered
+      ? {
+        whereSql: appendWhereCondition(paymentWhereBase.whereSql, 'COALESCE(p.media_id, acm.media_id) = ?'),
+        bindings: [...paymentWhereBase.bindings, mediaId],
+      }
+      : paymentWhereBase
+    const groupedSummaryWhere = {
+      whereSql: appendWhereCondition(summaryWhereBase.whereSql, '(s.media_id IS NULL OR s.media_id = gc.media_id)'),
+      bindings: summaryWhereBase.bindings,
+    }
+    const groupedPaymentWhere = {
+      whereSql: appendWhereCondition(paymentWhereBase.whereSql, '(p.media_id IS NULL OR p.media_id = gc.media_id)'),
+      bindings: paymentWhereBase.bindings,
+    }
     const hasPaymentReportTable = await tableHasColumns(c.env.DB, 'payment_report_daily', [
       'registration_date',
       'customer_id',
@@ -378,14 +409,16 @@ analysisRoute.get('/summary', async (c) => {
       'media_id',
     ])
 
-    const paymentAggSql = hasPaymentReportTable
+    const groupedPaymentAggSql = hasPaymentReportTable
       ? `
-      payment_by_ad_code AS (
+      payment_agg AS (
         SELECT
           ${paymentPeriodSql.period} AS period,
           ${paymentPeriodSql.periodStart} AS period_start,
           ${paymentPeriodSql.periodEnd} AS period_end,
-          NULLIF(TRIM(p.ad_code), '') AS ad_code,
+          gc.group_id AS campaign_group_id,
+          gc.group_name AS campaign_group_name,
+          gc.media_id,
           COUNT(DISTINCT CASE
             WHEN p.payment_count > 0 OR p.payment_amount > 0
             THEN COALESCE(NULLIF(TRIM(p.customer_id), ''), CAST(p.id AS TEXT))
@@ -393,30 +426,13 @@ analysisRoute.get('/summary', async (c) => {
           SUM(COALESCE(p.payment_count, 0)) AS payment_count,
           SUM(COALESCE(p.payment_amount, 0)) AS revenue
         FROM payment_report_daily p
-        ${paymentWhereBase.whereSql}
+        INNER JOIN unique_group_ad_codes gc
+          ON NULLIF(TRIM(p.ad_code), '') = gc.ad_code
+        ${groupedPaymentWhere.whereSql}
         GROUP BY
           period,
           period_start,
           period_end,
-          ad_code
-      ),
-      payment_agg AS (
-        SELECT
-          p.period,
-          p.period_start,
-          p.period_end,
-          gc.group_id AS campaign_group_id,
-          gc.group_name AS campaign_group_name,
-          gc.media_id,
-          SUM(p.payer_count) AS payer_count,
-          SUM(p.payment_count) AS payment_count,
-          SUM(p.revenue) AS revenue
-        FROM payment_by_ad_code p
-        INNER JOIN unique_group_ad_codes gc ON p.ad_code = gc.ad_code
-        GROUP BY
-          p.period,
-          p.period_start,
-          p.period_end,
           gc.group_id,
           gc.group_name,
           gc.media_id
@@ -435,8 +451,48 @@ analysisRoute.get('/summary', async (c) => {
           0 AS revenue
         WHERE 0
       )`
+    const directPaymentAggSql = hasPaymentReportTable
+      ? `
+      payment_agg AS (
+        SELECT
+          ${paymentPeriodSql.period} AS period,
+          ${paymentPeriodSql.periodStart} AS period_start,
+          ${paymentPeriodSql.periodEnd} AS period_end,
+          NULL AS campaign_group_id,
+          '' AS campaign_group_name,
+          COALESCE(p.media_id, acm.media_id) AS media_id,
+          COUNT(DISTINCT CASE
+            WHEN p.payment_count > 0 OR p.payment_amount > 0
+            THEN COALESCE(NULLIF(TRIM(p.customer_id), ''), CAST(p.id AS TEXT))
+          END) AS payer_count,
+          SUM(COALESCE(p.payment_count, 0)) AS payment_count,
+          SUM(COALESCE(p.payment_amount, 0)) AS revenue
+        FROM payment_report_daily p
+        LEFT JOIN ad_code_media acm
+          ON NULLIF(TRIM(p.ad_code), '') = acm.ad_code
+        ${directPaymentWhere.whereSql}
+        GROUP BY
+          period,
+          period_start,
+          period_end,
+          COALESCE(p.media_id, acm.media_id)
+      )`
+      : `
+      payment_agg AS (
+        SELECT
+          '' AS period,
+          '' AS period_start,
+          '' AS period_end,
+          NULL AS campaign_group_id,
+          '' AS campaign_group_name,
+          NULL AS media_id,
+          0 AS payer_count,
+          0 AS payment_count,
+          0 AS revenue
+        WHERE 0
+      )`
 
-    const detailSql = `
+    const groupedDetailSql = `
       WITH
       group_campaigns AS (
         SELECT DISTINCT
@@ -508,7 +564,7 @@ analysisRoute.get('/summary', async (c) => {
         INNER JOIN unique_group_campaigns gc
           ON gc.media_id = d.media_id
          AND gc.campaign_name = d.campaign_name
-        ${adWhere.whereSql}
+        ${adWhereBase.whereSql}
         UNION
         SELECT DISTINCT
           d.id,
@@ -526,7 +582,7 @@ analysisRoute.get('/summary', async (c) => {
         INNER JOIN unique_group_ad_codes gc
           ON gc.media_id = d.media_id
          AND gc.ad_code = d.campaign_id
-        ${adWhere.whereSql}
+        ${adWhereBase.whereSql}
       ),
       ad_agg AS (
         SELECT
@@ -563,7 +619,7 @@ analysisRoute.get('/summary', async (c) => {
         FROM media_summary_daily s
         INNER JOIN unique_group_ad_codes gc
           ON NULLIF(TRIM(s.ad_code), '') = gc.ad_code
-        ${summaryWhere.whereSql}
+        ${groupedSummaryWhere.whereSql}
         GROUP BY
           period,
           period_start,
@@ -572,7 +628,7 @@ analysisRoute.get('/summary', async (c) => {
           campaign_group_name,
           gc.media_id
       ),
-      ${paymentAggSql},
+      ${groupedPaymentAggSql},
       base_keys AS (
         SELECT period, period_start, period_end, campaign_group_id, campaign_group_name, media_id FROM ad_agg
         UNION
@@ -603,31 +659,141 @@ analysisRoute.get('/summary', async (c) => {
       LEFT JOIN ad_agg a
         ON a.period_start = k.period_start
        AND a.period_end = k.period_end
-       AND a.campaign_group_id = k.campaign_group_id
-       AND a.media_id = k.media_id
+       AND a.campaign_group_id IS k.campaign_group_id
+       AND a.media_id IS k.media_id
       LEFT JOIN summary_agg s
         ON s.period_start = k.period_start
        AND s.period_end = k.period_end
-       AND s.campaign_group_id = k.campaign_group_id
-       AND s.media_id = k.media_id
+       AND s.campaign_group_id IS k.campaign_group_id
+       AND s.media_id IS k.media_id
       LEFT JOIN payment_agg p
         ON p.period_start = k.period_start
        AND p.period_end = k.period_end
-       AND p.campaign_group_id = k.campaign_group_id
-       AND p.media_id = k.media_id
+       AND p.campaign_group_id IS k.campaign_group_id
+       AND p.media_id IS k.media_id
       ORDER BY k.period_start ASC, media_name ASC, k.campaign_group_name ASC
     `
+    const directDetailSql = `
+      WITH
+      ad_code_media AS (
+        SELECT
+          NULLIF(TRIM(c.ad_code), '') AS ad_code,
+          CASE
+            WHEN COUNT(DISTINCT c.media_id) = 1 THEN MIN(c.media_id)
+            ELSE NULL
+          END AS media_id
+        FROM campaign_master c
+        INNER JOIN media_master m
+          ON c.media_id = m.id
+         AND m.status = 'active'
+        WHERE NULLIF(TRIM(c.ad_code), '') IS NOT NULL
+        GROUP BY NULLIF(TRIM(c.ad_code), '')
+      ),
+      ad_agg AS (
+        SELECT
+          ${adPeriodSql.period} AS period,
+          ${adPeriodSql.periodStart} AS period_start,
+          ${adPeriodSql.periodEnd} AS period_end,
+          NULL AS campaign_group_id,
+          '' AS campaign_group_name,
+          d.media_id,
+          SUM(d.spend) AS cost,
+          SUM(d.impressions) AS impressions,
+          SUM(d.clicks) AS clicks,
+          SUM(COALESCE(d.media_cv, 0)) AS media_cv
+        FROM ad_media_daily d
+        ${directAdWhere.whereSql}
+        GROUP BY
+          period,
+          period_start,
+          period_end,
+          d.media_id
+      ),
+      summary_agg AS (
+        SELECT
+          ${summaryPeriodSql.period} AS period,
+          ${summaryPeriodSql.periodStart} AS period_start,
+          ${summaryPeriodSql.periodEnd} AS period_end,
+          NULL AS campaign_group_id,
+          '' AS campaign_group_name,
+          COALESCE(s.media_id, acm.media_id) AS media_id,
+          SUM(s.access_count) AS access_count,
+          SUM(s.registration_count) AS registration_count,
+          SUM(s.provisional_registration_count) AS provisional_registration_count
+        FROM media_summary_daily s
+        LEFT JOIN ad_code_media acm
+          ON NULLIF(TRIM(s.ad_code), '') = acm.ad_code
+        ${directSummaryWhere.whereSql}
+        GROUP BY
+          period,
+          period_start,
+          period_end,
+          COALESCE(s.media_id, acm.media_id)
+      ),
+      ${directPaymentAggSql},
+      base_keys AS (
+        SELECT period, period_start, period_end, campaign_group_id, campaign_group_name, media_id FROM ad_agg
+        UNION
+        SELECT period, period_start, period_end, campaign_group_id, campaign_group_name, media_id FROM summary_agg
+        UNION
+        SELECT period, period_start, period_end, campaign_group_id, campaign_group_name, media_id FROM payment_agg
+      )
+      SELECT
+        k.period,
+        k.period_start,
+        k.period_end,
+        k.media_id,
+        COALESCE(m.media_name, '') AS media_name,
+        k.campaign_group_id,
+        k.campaign_group_name,
+        COALESCE(a.cost, 0) AS cost,
+        COALESCE(a.impressions, 0) AS impressions,
+        COALESCE(a.clicks, 0) AS clicks,
+        COALESCE(a.media_cv, 0) AS media_cv,
+        COALESCE(s.access_count, 0) AS access_count,
+        COALESCE(s.registration_count, 0) AS registration_count,
+        COALESCE(s.provisional_registration_count, 0) AS provisional_registration_count,
+        COALESCE(p.payer_count, 0) AS payer_count,
+        COALESCE(p.payment_count, 0) AS payment_count,
+        COALESCE(p.revenue, 0) AS revenue
+      FROM base_keys k
+      LEFT JOIN media_master m ON k.media_id = m.id
+      LEFT JOIN ad_agg a
+        ON a.period_start = k.period_start
+       AND a.period_end = k.period_end
+       AND a.campaign_group_id IS k.campaign_group_id
+       AND a.media_id IS k.media_id
+      LEFT JOIN summary_agg s
+        ON s.period_start = k.period_start
+       AND s.period_end = k.period_end
+       AND s.campaign_group_id IS k.campaign_group_id
+       AND s.media_id IS k.media_id
+      LEFT JOIN payment_agg p
+        ON p.period_start = k.period_start
+       AND p.period_end = k.period_end
+       AND p.campaign_group_id IS k.campaign_group_id
+       AND p.media_id IS k.media_id
+      ORDER BY k.period_start ASC, media_name ASC
+    `
+    const detailSql = isCampaignGroupFiltered ? groupedDetailSql : directDetailSql
+    const detailBindings = isCampaignGroupFiltered
+      ? [
+        ...groupWhere.bindings,
+        ...adWhereBase.bindings,
+        ...adWhereBase.bindings,
+        ...groupedSummaryWhere.bindings,
+        ...(hasPaymentReportTable ? groupedPaymentWhere.bindings : []),
+      ]
+      : [
+        ...directAdWhere.bindings,
+        ...directSummaryWhere.bindings,
+        ...(hasPaymentReportTable ? directPaymentWhere.bindings : []),
+      ]
 
     const { results } = await prepareWithBindings(
       c.env.DB,
       detailSql,
-      [
-        ...groupWhere.bindings,
-        ...adWhere.bindings,
-        ...adWhere.bindings,
-        ...summaryWhere.bindings,
-        ...(hasPaymentReportTable ? paymentWhereBase.bindings : []),
-      ]
+      detailBindings
     ).all<AggregateRow>()
 
     const detailRows = results.map((row) => ({
