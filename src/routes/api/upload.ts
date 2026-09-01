@@ -1245,16 +1245,73 @@ function buildAdMediaDailyRows(
     normalizedHeaders: headerRow.map((header) => normalizeHeader(header)),
     mediaName,
     parserType: hasDedicatedAdMediaParser(mediaName) ? 'dedicated' : 'mapping',
+    hasColumnMappings: columnMappings.length > 0,
   })
 
-  const commonRows = hasDedicatedAdMediaParser(mediaName)
-    ? parseAdMediaRows(rows, { mediaName, exchangeRates })
-    : parseMappedAdMediaRows(rows, {
+  let commonRows: ReturnType<typeof parseAdMediaRows> | null = null
+  let dedicatedParserError: string | null = null
+
+  if (hasDedicatedAdMediaParser(mediaName)) {
+    try {
+      commonRows = parseAdMediaRows(rows, { mediaName, exchangeRates })
+      logUploadInfo('ad_media dedicated parser completed', {
+        mediaId,
+        mediaName,
+        parsedRows: commonRows.length,
+      })
+    } catch (err) {
+      dedicatedParserError = err instanceof Error ? err.message : String(err)
+      logUploadError('ad_media dedicated parser failed', {
+        mediaId,
+        mediaName,
+        error: dedicatedParserError,
+        hasColumnMappings: columnMappings.length > 0,
+      })
+    }
+  }
+
+  if (!commonRows && columnMappings.length > 0) {
+    try {
+      commonRows = parseMappedAdMediaRows(rows, {
+        mediaName,
+        exchangeRates,
+        currency: mediaCurrency,
+        mappings: columnMappings,
+      })
+      logUploadInfo('ad_media column mapping parser completed', {
+        mediaId,
+        mediaName,
+        parsedRows: commonRows.length,
+        fallbackFromDedicatedParser: Boolean(dedicatedParserError),
+      })
+    } catch (err) {
+      const mappedParserError = err instanceof Error ? err.message : String(err)
+      if (dedicatedParserError) {
+        throw new Error([
+          dedicatedParserError,
+          `保存済みのCSV列マッピングでも解析できませんでした: ${mappedParserError}`,
+        ].join('\n'))
+      }
+      throw err
+    }
+  }
+
+  if (!commonRows) {
+    if (dedicatedParserError) {
+      throw new Error([
+        dedicatedParserError,
+        '',
+        `${mediaName}のCSV列マッピングを設定してください。`,
+      ].join('\n'))
+    }
+
+    commonRows = parseMappedAdMediaRows(rows, {
       mediaName,
       exchangeRates,
       currency: mediaCurrency,
       mappings: columnMappings,
     })
+  }
 
   return commonRows.map((row): AdMediaDailyRow => ({
     ...row,

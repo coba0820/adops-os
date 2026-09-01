@@ -257,12 +257,13 @@ async function ensureAdMediaColumnMapping({ mediaId, rows, previewArea, onReady 
   }
 
   const data = res.data
-  if (data.has_dedicated_parser || data.ready) return true
+  if ((data.has_dedicated_parser && data.dedicated_parser_ready) || data.ready) return true
 
   renderAdMediaMappingRequired(previewArea, {
     mediaId,
     rows,
     data,
+    error: data.dedicated_parser_error || null,
   }, onReady)
   return false
 }

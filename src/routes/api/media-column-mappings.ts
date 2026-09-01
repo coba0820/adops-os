@@ -3,6 +3,7 @@ import type { ApiResponse, Bindings } from '../../types'
 import {
   getAdMediaMappingFields,
   hasDedicatedAdMediaParser,
+  parseAdMediaRows,
   inferAdMediaColumnMappings,
   parseMappedAdMediaRows,
   type AdMediaColumnMapping,
@@ -183,19 +184,39 @@ mediaColumnMappingsRoute.post('/preview', async (c) => {
     const exchangeRates = await fetchExchangeRates(c.env.DB)
     let previewRows: ReturnType<typeof buildPreviewRows> = []
     let previewError: string | null = null
+    let dedicatedParserReady = false
+    let dedicatedParserError: string | null = null
 
-    if (missingRequired.length === 0) {
+    const dedicatedPreviewRows = rows.length > 1
+      ? [rows[0], ...rows.slice(1).filter((row) => !isBlankRow(row)).slice(0, 20)]
+      : rows
+
+    if (hasDedicatedParser) {
+      try {
+        previewRows = parseAdMediaRows(dedicatedPreviewRows, {
+          mediaName: media.media_name,
+          exchangeRates,
+        })
+        dedicatedParserReady = true
+      } catch (err) {
+        dedicatedParserError = err instanceof Error ? err.message : '専用Parserで解析できませんでした'
+      }
+    }
+
+    if (!dedicatedParserReady && missingRequired.length === 0) {
       try {
         previewRows = buildPreviewRows(rows, media.media_name, media.currency, exchangeRates, mappings)
       } catch (err) {
         previewError = err instanceof Error ? err.message : '変換プレビューに失敗しました'
       }
     }
-    const ready = missingRequired.length === 0 && previewError === null
+    const ready = dedicatedParserReady || (missingRequired.length === 0 && previewError === null)
 
     return c.json<ApiResponse<{
       media: typeof media
       has_dedicated_parser: boolean
+      dedicated_parser_ready: boolean
+      dedicated_parser_error: string | null
       fields: ReturnType<typeof getAdMediaMappingFields>
       headers: string[]
       mappings: AdMediaColumnMapping[]
@@ -209,6 +230,8 @@ mediaColumnMappingsRoute.post('/preview', async (c) => {
       data: {
         media,
         has_dedicated_parser: hasDedicatedParser,
+        dedicated_parser_ready: dedicatedParserReady,
+        dedicated_parser_error: dedicatedParserError,
         fields: getAdMediaMappingFields(),
         headers,
         mappings,
