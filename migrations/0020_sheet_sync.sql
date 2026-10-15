@@ -53,9 +53,9 @@ CREATE TABLE IF NOT EXISTS sheet_sync_tab_results (
   reason TEXT,
   upload_history_id INTEGER,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (run_id) REFERENCES sheet_sync_runs(id),
-  FOREIGN KEY (source_id) REFERENCES sheet_sync_sources(id),
-  FOREIGN KEY (upload_history_id) REFERENCES upload_history(id)
+  -- source_id / upload_history_id は外部キーにしない
+  -- （取込履歴の削除・タブ定義の削除を、実行履歴が妨げないようにするため）
+  FOREIGN KEY (run_id) REFERENCES sheet_sync_runs(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sheet_sync_tab_results_run

@@ -1488,6 +1488,15 @@ export type ImportRowsInput = {
   fileName: string
   rowCount?: number
   importMethod?: ImportMethod
+  // 同期時：この期間内の行だけを取り込み、この期間のデータを丸ごと置き換える
+  dateRange?: ImportDateRange
+  // 同期時：置き換え前の行数 × この率を新しい行数が下回ったら取り込まない
+  minRowRatio?: number
+}
+
+export type ImportDateRange = {
+  from: string
+  to: string
 }
 
 export type ImportTotals = Record<string, number>
@@ -1502,12 +1511,77 @@ export type ImportRowsResult = {
 
 export class ImportError extends Error {
   status: 400 | 500
+  // validate: 保存前に止めた（DBは変更していない） / save: 保存の途中で失敗した
+  stage: 'validate' | 'save'
 
-  constructor(message: string, status: 400 | 500 = 400) {
+  constructor(message: string, status: 400 | 500 = 400, stage: 'validate' | 'save' = 'validate') {
     super(message)
     this.name = 'ImportError'
     this.status = status
+    this.stage = stage
   }
+}
+
+const NO_ROWS_IN_RANGE_MESSAGE = '対象期間内の行が0件です'
+
+function isDateInRange(date: string, range: ImportDateRange) {
+  return date >= range.from && date <= range.to
+}
+
+const SOURCE_SCOPED_TABLES = {
+  site_summary_csv: { table: 'media_summary_daily', dateColumn: 'target_date' },
+  payment_report_csv: { table: 'payment_report_daily', dateColumn: 'registration_date' },
+} as const
+
+async function countExistingRowsInRange(
+  db: D1Database,
+  fileType: UploadFileType,
+  mediaId: number | null,
+  dataSource: UploadDataSource,
+  range: ImportDateRange
+) {
+  if (fileType === 'ad_media_csv') {
+    const row = await db.prepare(
+      `SELECT COUNT(*) AS count
+       FROM ad_media_daily
+       WHERE media_id = ?
+         AND target_date BETWEEN ? AND ?`
+    )
+      .bind(mediaId, range.from, range.to)
+      .first<{ count: number }>()
+    return Number(row?.count ?? 0)
+  }
+
+  const { table, dateColumn } = SOURCE_SCOPED_TABLES[fileType]
+  const row = await db.prepare(
+    `SELECT COUNT(*) AS count
+     FROM ${table}
+     WHERE data_source = ?
+       AND ${dateColumn} BETWEEN ? AND ?`
+  )
+    .bind(dataSource, range.from, range.to)
+    .first<{ count: number }>()
+  return Number(row?.count ?? 0)
+}
+
+// 同期用：データソース単位で、期間内の他の取込の行をすべて削除する
+async function deleteOtherSourceRowsInRange(
+  db: D1Database,
+  fileType: 'site_summary_csv' | 'payment_report_csv',
+  dataSource: UploadDataSource,
+  range: ImportDateRange,
+  uploadHistoryId: number
+) {
+  const { table, dateColumn } = SOURCE_SCOPED_TABLES[fileType]
+  const result = await db.prepare(
+    `DELETE FROM ${table}
+     WHERE data_source = ?
+       AND ${dateColumn} BETWEEN ? AND ?
+       AND upload_history_id <> ?`
+  )
+    .bind(dataSource, range.from, range.to, uploadHistoryId)
+    .run()
+  return Number(result.meta?.changes ?? 0)
 }
 
 function sumBy<T>(rows: T[], pick: (row: T) => number) {
@@ -1601,6 +1675,11 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
           adMediaColumnMappings
         )
       )
+      if (input.dateRange) {
+        const range = input.dateRange
+        preparedAdMediaRows = preparedAdMediaRows.filter((row) => isDateInRange(row.targetDate, range))
+        if (preparedAdMediaRows.length === 0) throw new Error(NO_ROWS_IN_RANGE_MESSAGE)
+      }
       adMediaDateRange = getTargetDateRange(preparedAdMediaRows)
 
       logUploadInfo('ad_media_daily prepared rows', {
@@ -1634,6 +1713,11 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
           dataSource
         )
       )
+      if (input.dateRange) {
+        const range = input.dateRange
+        preparedMediaSummaryRows = preparedMediaSummaryRows.filter((row) => isDateInRange(row.targetDate, range))
+        if (preparedMediaSummaryRows.length === 0) throw new Error(NO_ROWS_IN_RANGE_MESSAGE)
+      }
       mediaSummaryDateRange = getTargetDateRange(preparedMediaSummaryRows)
 
       logUploadInfo('media_summary_daily prepared rows', {
@@ -1650,7 +1734,7 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
     }
 
     if (fileType === 'payment_report_csv') {
-      const allPaymentReportRows = aggregatePaymentReportRows(
+      let allPaymentReportRows = aggregatePaymentReportRows(
         await buildPaymentReportDailyRows(
           db,
           csvRows,
@@ -1659,6 +1743,12 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
           dataSource
         )
       )
+
+      if (input.dateRange) {
+        const range = input.dateRange
+        allPaymentReportRows = allPaymentReportRows.filter((row) => isDateInRange(row.registrationDate, range))
+        if (allPaymentReportRows.length === 0) throw new Error(NO_ROWS_IN_RANGE_MESSAGE)
+      }
 
       if (allPaymentReportRows.length === 0) {
         throw new Error('決済レポートCSVに保存対象の明細行がありません')
@@ -1703,6 +1793,10 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
       if (preparedPaymentReportRows.length === 0 && uploadWarnings.length === 0) {
         throw new Error('決済レポートCSVに保存対象の明細行がありません')
       }
+
+      if (input.dateRange && preparedPaymentReportRows.length === 0) {
+        throw new Error(`対象期間内に取込できる行がありません（未登録の広告コード ${unlinkedPaymentAdCodes.length}件）`)
+      }
     }
   } catch (err) {
     logUploadError('detail preparation failed before upload_history insert', {
@@ -1714,6 +1808,20 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
         ? err.message
         : `${UPLOAD_FILE_TYPE_LABELS[fileType]}の明細解析に失敗しました`
     )
+  }
+
+  if (input.dateRange && input.minRowRatio && input.minRowRatio > 0) {
+    const newRowCount = fileType === 'ad_media_csv'
+      ? preparedAdMediaRows.length
+      : fileType === 'site_summary_csv'
+        ? preparedMediaSummaryRows.length
+        : preparedPaymentReportRows.length
+    const existingRowCount = await countExistingRowsInRange(db, fileType, mediaId, dataSource, input.dateRange)
+    if (existingRowCount > 0 && newRowCount < existingRowCount * input.minRowRatio) {
+      throw new ImportError(
+        `行数が大きく減っています（置き換え前 ${existingRowCount}行 → 今回 ${newRowCount}行。許容下限 ${Math.round(input.minRowRatio * 100)}%）`
+      )
+    }
   }
 
   const result = await db.prepare(
@@ -1740,8 +1848,13 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
   )
 
   if (!uploadHistoryId) {
-    throw new ImportError('アップロード履歴IDを取得できませんでした', 500)
+    throw new ImportError('アップロード履歴IDを取得できませんでした', 500, 'save')
   }
+
+  // 同期時は「データに含まれる日付」ではなく指定期間全体を置き換える
+  const replaceRange: TargetDateRange | null = input.dateRange
+    ? { minDate: input.dateRange.from, maxDate: input.dateRange.to }
+    : null
 
   let savedRows = 0
   let dateRange: TargetDateRange | null = null
@@ -1796,7 +1909,7 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
         await deleteOldAdMediaRowsInRange(
           db,
           mediaId,
-          adMediaDateRange,
+          replaceRange ?? adMediaDateRange,
           uploadHistoryId
         )
         logUploadInfo('ad_media_daily old rows cleaned', {
@@ -1859,7 +1972,22 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
         savedRows,
       })
 
-      if (mediaSummaryDateRange) {
+      if (replaceRange) {
+        const deletedRows = await deleteOtherSourceRowsInRange(
+          db,
+          'site_summary_csv',
+          dataSource,
+          input.dateRange!,
+          uploadHistoryId
+        )
+        logUploadInfo('media_summary_daily source rows replaced', {
+          uploadHistoryId,
+          dataSource,
+          minTargetDate: replaceRange.minDate,
+          maxTargetDate: replaceRange.maxDate,
+          deletedRows,
+        })
+      } else if (mediaSummaryDateRange) {
         await deleteOldMediaSummaryRowsInRange(
           db,
           preparedMediaSummaryRows,
@@ -1902,7 +2030,7 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
         throw new Error('決済レポートCSVに保存対象の明細行がありません')
       }
 
-      if (paymentReportDateRange) {
+      if (paymentReportDateRange && !replaceRange) {
         const cleanupResult = await deleteOldPaymentReportRowsInRange(
           db,
           preparedPaymentReportRows,
@@ -1952,6 +2080,23 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
         savedRows,
       })
 
+      if (replaceRange) {
+        const deletedRows = await deleteOtherSourceRowsInRange(
+          db,
+          'payment_report_csv',
+          dataSource,
+          input.dateRange!,
+          uploadHistoryId
+        )
+        logUploadInfo('payment_report_daily source rows replaced', {
+          uploadHistoryId,
+          dataSource,
+          minTargetDate: replaceRange.minDate,
+          maxTargetDate: replaceRange.maxDate,
+          deletedRows,
+        })
+      }
+
       dateRange = paymentReportDateRange
       totals = {
         payment_count: sumBy(preparedPaymentReportRows, (row) => row.paymentCount),
@@ -1967,7 +2112,9 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
     throw new ImportError(
       err instanceof Error
         ? err.message
-        : `${UPLOAD_FILE_TYPE_LABELS[fileType]}の明細保存に失敗しました`
+        : `${UPLOAD_FILE_TYPE_LABELS[fileType]}の明細保存に失敗しました`,
+      400,
+      'save'
     )
   }
 

@@ -169,7 +169,10 @@ mediaRoute.delete('/:id', async (c) => {
     )
   }
 
-  await c.env.DB.prepare('DELETE FROM media_master WHERE id = ?').bind(id).run()
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM sheet_sync_sources WHERE media_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM media_master WHERE id = ?').bind(id),
+  ])
 
   return c.json<ApiResponse<null>>({ success: true })
 })

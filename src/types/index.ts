@@ -10,6 +10,10 @@
  */
 export type Bindings = {
   DB: D1Database
+  // スプレッドシート同期用のサービスアカウント鍵（シークレット）
+  GOOGLE_SERVICE_ACCOUNT_JSON?: string
+  // 'true' のとき、手動同期APIでタブの中身をリクエストから直接渡せる（ローカル検証用）
+  SHEET_SYNC_TEST_MODE?: string
 }
 
 /**

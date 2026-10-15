@@ -1,0 +1,24 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  // AdOps OS: スプレッドシート同期の定時実行用 Worker
+  // Cloudflare Pages の関数は Cron Trigger を使えないため、別 Worker として動かす。
+  "name": "adops-os-sheet-sync",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-26",
+  // Pages と同じ D1 を使う
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "adops-os-db",
+      "database_id": "3a02bd00-7644-4046-9f80-d61fc9813ead"
+    }
+  ],
+  // 実行時刻（UTC）。"0 23 * * *" = 毎朝 JST 8:00
+  // 変更したら npm run worker:sheet-sync:deploy で反映する
+  "triggers": {
+    "crons": ["0 23 * * *"]
+  },
+  "observability": {
+    "enabled": true
+  }
+}
