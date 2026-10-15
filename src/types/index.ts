@@ -116,6 +116,8 @@ export type UploadFileType =
 
 export type UploadStatus = 'success'
 
+export type ImportMethod = 'manual' | 'sheet_sync'
+
 export interface UploadHistory {
   id: number
   file_type: UploadFileType
@@ -124,6 +126,7 @@ export interface UploadHistory {
   row_count: number
   target_date: string | null
   status: UploadStatus
+  import_method: ImportMethod
   uploaded_at: string
 }
 

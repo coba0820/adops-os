@@ -2,7 +2,7 @@
 // 取込処理（行データ → パース → マスタ補完 → 旧データ削除 → 保存）
 // 手動アップロード（/api/upload）とスプレッドシート同期の両方から使う。
 // ============================================================
-import type { UploadFileType } from '../types'
+import type { ImportMethod, UploadFileType } from '../types'
 import { fetchAppSettings } from './settings'
 import {
   hasDedicatedAdMediaParser,
@@ -1480,8 +1480,6 @@ async function buildPaymentReportDailyRows(
   return paymentRows
 }
 
-export type ImportMethod = 'manual' | 'sheet_sync'
-
 export type ImportRowsInput = {
   fileType: UploadFileType
   mediaId?: number | null
@@ -1720,14 +1718,15 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
 
   const result = await db.prepare(
     `INSERT INTO upload_history
-       (file_type, media_id, file_name, row_count, target_date, status)
-     VALUES (?, ?, ?, ?, date('now', '+9 hours'), 'success')`
+       (file_type, media_id, file_name, row_count, target_date, status, import_method)
+     VALUES (?, ?, ?, ?, date('now', '+9 hours'), 'success', ?)`
   )
     .bind(
       fileType,
       mediaId,
       fileName,
-      rowCount
+      rowCount,
+      input.importMethod ?? 'manual'
     )
     .run()
 

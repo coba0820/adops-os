@@ -29,7 +29,7 @@ type ExchangeRateRow = {
 }
 
 async function fetchSystemInfo(db: D1Database) {
-  const latestMigration = '0012_ad_media_import_foundation'
+  const latestMigration = '0020_sheet_sync'
   const [media, sites, campaigns, uploads] = await Promise.all([
     db.prepare('SELECT COUNT(*) AS count FROM media_master').first<{ count: number }>(),
     db.prepare('SELECT COUNT(*) AS count FROM site_master').first<{ count: number }>(),

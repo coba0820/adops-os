@@ -58,7 +58,7 @@ uploadRoute.get('/', async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT
        h.id, h.file_type, h.media_id, m.media_name,
-       h.file_name, h.row_count, h.target_date, h.status, h.uploaded_at
+       h.file_name, h.row_count, h.target_date, h.status, h.import_method, h.uploaded_at
      FROM upload_history h
      LEFT JOIN media_master m ON h.media_id = m.id
      ORDER BY h.uploaded_at DESC, h.id DESC
@@ -83,7 +83,7 @@ uploadRoute.get('/today', async (c) => {
       c.env.DB.prepare(
         `SELECT
            h.id, h.file_type, h.media_id, m.media_name,
-           h.file_name, h.row_count, h.target_date, h.status, h.uploaded_at
+           h.file_name, h.row_count, h.target_date, h.status, h.import_method, h.uploaded_at
          FROM upload_history h
          LEFT JOIN media_master m ON h.media_id = m.id
          WHERE h.target_date = date('now', '+9 hours')
@@ -180,7 +180,7 @@ uploadRoute.delete('/:id', async (c) => {
   }
 
   const upload = await c.env.DB.prepare(
-    `SELECT id, file_type, media_id, file_name, row_count, target_date, status, uploaded_at
+    `SELECT id, file_type, media_id, file_name, row_count, target_date, status, import_method, uploaded_at
      FROM upload_history
      WHERE id = ?`
   )
