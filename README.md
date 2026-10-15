@@ -57,7 +57,7 @@
 | PUT | `/api/campaign/:id` | キャンペーンマスタ更新 |
 | DELETE | `/api/campaign/:id` | キャンペーンマスタ削除 |
 | GET | `/api/upload` | 取込履歴一覧（直近50件、`import_method` 付き） |
-| POST | `/api/upload` | 手動アップロード `{ file_type, media_id?, data_source?, file_name, row_count, csv_rows | csv_text }` |
+| POST | `/api/upload` | 手動アップロード `{ file_type, media_id?, data_source?, file_name, row_count, csv_rows }`（`csv_rows` の代わりに `csv_text` も可） |
 | GET | `/api/sheet-sync/status` | 同期設定の状態、最新の実行とタブ別結果、同期する期間 |
 | GET | `/api/sheet-sync/runs` | 同期の実行履歴（`?limit=`、既定20件） |
 | GET | `/api/sheet-sync/runs/:id` | 指定した実行のタブ別結果 |
