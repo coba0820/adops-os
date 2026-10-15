@@ -20,10 +20,15 @@
 - 今日やること（チェックリスト）（ダミーデータ）
 
 ### ② データ取込
-- 広告媒体CSV（媒体選択＋アップロード＋プレビュー）
-- 媒体集計CSV（アップロード＋プレビュー）
-- 決済レポートCSV（アップロード＋プレビュー）
-- ※ v1では「保存・分析・結合」は未実装。アップロード履歴（ファイル名・行数・種別）のみ`upload_history`テーブルに記録
+- **スプレッドシート同期（自動取込）**
+  - 「読み込み用スプレッドシート」に IMPORTRANGE で集約したデータを、毎朝 JST 8:00 に自動で読み込む（画面の「今すぐ同期」でも実行可）
+  - 1タブ＝1データ種別。広告媒体は媒体ごと、サイト側は YNS／自社 × 媒体集計／決済レポートの4種
+  - 同期のたびに **当月＋前月**（設定で変更可）の範囲を読み込み、その範囲のデータを置き換える
+  - 安全チェックに引っかかったタブは取り込まずに理由を記録（タブなし、ヘッダー空、`#REF!` などのエラー値、期間内0件、行数の大幅減少、パースエラー）。1タブの失敗は他のタブに影響しない
+  - 実行履歴とタブ別結果は `sheet_sync_runs` / `sheet_sync_tab_results` に記録し、データ取込画面に表示
+- **手動アップロード（予備）**
+  - 広告媒体CSV（媒体選択）／媒体集計CSV／決済レポートCSV を CSV・XLSX でアップロード
+  - 取込処理は同期と共通（`src/lib/import-service.ts`）。取込履歴は `import_method`（手動／シート同期）で区別
 
 ### ③ マスタ管理
 - 媒体マスタ（CRUD）
@@ -51,8 +56,14 @@
 | POST | `/api/campaign` | キャンペーンマスタ追加 `{ campaign_name, media_id, ad_code, site_id, is_active }` |
 | PUT | `/api/campaign/:id` | キャンペーンマスタ更新 |
 | DELETE | `/api/campaign/:id` | キャンペーンマスタ削除 |
-| GET | `/api/upload` | CSVアップロード履歴一覧（直近50件） |
-| POST | `/api/upload` | アップロード履歴記録 `{ file_type, media_id, file_name, row_count }` |
+| GET | `/api/upload` | 取込履歴一覧（直近50件、`import_method` 付き） |
+| POST | `/api/upload` | 手動アップロード `{ file_type, media_id?, data_source?, file_name, row_count, csv_rows | csv_text }` |
+| GET | `/api/sheet-sync/status` | 同期設定の状態、最新の実行とタブ別結果、同期する期間 |
+| GET | `/api/sheet-sync/runs` | 同期の実行履歴（`?limit=`、既定20件） |
+| GET | `/api/sheet-sync/runs/:id` | 指定した実行のタブ別結果 |
+| POST | `/api/sheet-sync/run` | 今すぐ同期（手動実行） |
+| GET | `/api/sheet-sync/sources` | 読み込むタブの定義（広告媒体ごと＋サイト側4種） |
+| PUT | `/api/sheet-sync/sources` | タブ定義の更新 `{ sources: [{ source_type, media_id?, data_source?, tab_name, is_active? }] }` |
 
 ## データアーキテクチャ
 
@@ -61,8 +72,11 @@
   - `media_master`（媒体マスタ）: id, media_name, created_at, updated_at
   - `site_master`（サイトマスタ）: id, site_name, created_at, updated_at
   - `campaign_master`（キャンペーンマスタ）: id, campaign_name, media_id(FK), ad_code, site_id(FK), is_active, created_at, updated_at
-  - `upload_history`（アップロード履歴）: id, file_type, media_id(FK), file_name, row_count, uploaded_at
-- **マイグレーション**: `migrations/0001_initial_schema.sql`
+  - `upload_history`（アップロード履歴）: id, file_type, media_id(FK), file_name, row_count, target_date, status, import_method, uploaded_at
+  - `sheet_sync_sources`（同期するタブの定義）: id, source_type, media_id, data_source, tab_name, is_active
+  - `sheet_sync_runs`（同期の実行履歴）: id, trigger(cron/manual), status(running/success/partial/failed), date_from, date_to, started_at, finished_at, error_message
+  - `sheet_sync_tab_results`（タブ別結果）: id, run_id, source_id, tab_name, status(imported/skipped/failed), row_count, date_from, date_to, reason, upload_history_id
+- **マイグレーション**: `migrations/`（スプレッドシート同期は `0020_sheet_sync.sql`）
 - **シードデータ**: `seed.sql`（開発用ダミーマスタデータ）
 
 ## ディレクトリ構成
@@ -73,18 +87,26 @@ webapp/
 │   ├── index.tsx           # エントリーポイント（ルーティング登録）
 │   ├── renderer.tsx        # SPAシェル（HTML雛形、左メニュー枠を出力）
 │   ├── types/index.ts      # 共通型定義（Bindings, Master型など）
+│   ├── lib/
+│   │   ├── import-service.ts  # 取込処理（手動アップロード・同期で共通）
+│   │   ├── google-sheets.ts   # Google Sheets API 読み込み（サービスアカウント認証）
+│   │   ├── sheet-sync.ts      # スプレッドシート同期（安全チェック・期間置き換え・履歴）
+│   │   ├── ad-media-parsers.ts
+│   │   └── settings.ts
 │   └── routes/api/         # APIルート（機能ごとにファイル分割）
 │       ├── media.ts        # 媒体マスタ CRUD
 │       ├── site.ts         # サイトマスタ CRUD
 │       ├── campaign.ts     # キャンペーンマスタ CRUD
-│       ├── upload.ts       # アップロード履歴
-│       └── dashboard.ts    # ダッシュボード用ダミーデータ
+│       ├── upload.ts       # 手動アップロード・取込履歴
+│       ├── sheet-sync.ts   # スプレッドシート同期 API
+│       └── dashboard.ts    # ダッシュボード
 ├── public/static/
 │   ├── css/main.css        # デザインシステム（ライトテーマ・管理画面風）
 │   └── js/
 │       ├── app.js          # SPAルーター（ハッシュベース）
 │       ├── components/     # 共通UIパーツ（サイドバー、モーダル、トースト、CSVパーサー等）
 │       └── pages/          # 画面ごとのロジック（dashboard/data-import/master/coming-soon）
+├── workers/sheet-sync/      # 定時実行用 Worker（Cron で同期を呼ぶ。src/lib を共有）
 ├── migrations/              # D1マイグレーションSQL
 ├── seed.sql                 # 開発用シードデータ
 └── wrangler.jsonc           # Cloudflare設定（D1バインディング含む）
@@ -119,6 +141,47 @@ webapp/
 1. 左メニュー「マスタ管理」で媒体・サイトを登録し、それらを紐付けたキャンペーンマスタを作成する
 2. 左メニュー「データ取込」で3種類のCSV（広告媒体CSV／媒体集計CSV／決済レポートCSV）をアップロードし、内容をプレビュー確認する（v1では保存されず、履歴のみ記録）
 3. 左メニュー「ダッシュボード」で、今日確認すべきアラート・KPI・月末着地予測・やることリストを確認する（v1はダミーデータ）
+
+## スプレッドシート同期のセットアップ
+
+### 1. Google 側の準備（ユーザー作業）
+1. Google Cloud でプロジェクトを作成し、Google Sheets API を有効化する
+2. サービスアカウントを作成し、JSON鍵を発行する（鍵ファイルはリポジトリに置かない）
+3. 読み込み用スプレッドシートを作成し、サービスアカウントのメールアドレスに「閲覧者」で共有する（「ウェブに公開」は使わない）
+4. データの種類ごとにタブを作り、各元シートから IMPORTRANGE で取り込む。**1行目は元のエクスポートと同じ列名**にする
+
+### 2. 鍵をシークレットとして登録（Pages と Worker の両方）
+```bash
+# Pages（画面の「今すぐ同期」用）
+npx wrangler pages secret put GOOGLE_SERVICE_ACCOUNT_JSON --project-name adops-os < service-account.json
+# Worker（毎朝の定時実行用）
+npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON --config workers/sheet-sync/wrangler.jsonc < service-account.json
+```
+PowerShell では `Get-Content service-account.json -Raw | npx wrangler ...` の形で渡す。
+
+### 3. 本番反映の順番
+1. `npm run db:migrate:prod`（0020 を本番 D1 に適用。**コードより先に**行う）
+2. `npm run deploy`（Pages）
+3. `npm run worker:sheet-sync:deploy`（定時実行 Worker）
+4. 上記 2. のシークレット登録
+
+### 4. 画面での設定
+1. 設定 > スプレッドシート同期：有効化、スプレッドシートID（URLを貼ってもよい）、同期する月数、行数減少の許容率
+2. 設定 > サイト側のタブ名：YNS／自社 の媒体集計・決済レポートのタブ名
+3. マスタ管理 > 媒体：各媒体の「読み込むタブ名」（空欄なら同期対象外。停止中の媒体は同期しない）
+4. データ取込 > 「今すぐ同期」で結果を確認
+
+### 運用メモ
+- 実行時刻は `workers/sheet-sync/wrangler.jsonc` の `triggers.crons`（UTC）。変更後は Worker を再デプロイする
+- 行数チェックは「置き換え前に DB にある同じ期間・同じデータの行数 × 許容率」と比べる。月初に期間が短くなっても誤ってスキップしない
+- 15分以上「実行中」のまま残った実行は、次の同期開始時に失敗扱いにして打ち切る
+- ダッシュボードでは「最新の同期が失敗／一部スキップ」と「JST 10時を過ぎても当日の同期がない」場合に警告する（設定 > アラートでON/OFF）
+
+### ローカルでの確認
+- `npm run db:migrate:local` で 0020 を適用
+- `.dev.vars` に `SHEET_SYNC_TEST_MODE=true` を書くと、`POST /api/sheet-sync/run` の body に `{ "tabs": { "タブ名": [["見出し", ...], [...]] } }` を渡して、Google に接続せずに同期処理を試せる（本番では設定しない）
+- 実際のシートで試す場合は `.dev.vars` に `GOOGLE_SERVICE_ACCOUNT_JSON=...`（1行のJSON）を書く
+- Worker は `npm run worker:sheet-sync:dev` で起動し、`http://localhost:8787/__scheduled` を開くと定時実行を再現できる（ローカル D1 は Pages と共有。Worker 用の鍵は `workers/sheet-sync/.dev.vars` に書く）
 
 ## デプロイ
 - **プラットフォーム**: Cloudflare Pages
