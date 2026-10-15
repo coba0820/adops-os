@@ -76,6 +76,21 @@ export async function renderDataImportPage(container) {
       <div class="card">
         <div class="card-header">
           <div>
+            <div class="card-title"><i class="fa-solid fa-table"></i>スプレッドシート同期</div>
+            <div class="card-subtitle">読み込み用スプレッドシートから毎朝自動で取り込みます。下の手動アップロードは予備としてそのまま使えます。</div>
+          </div>
+          <button class="btn btn-primary btn-sm" id="sheet-sync-run-btn" disabled>
+            <i class="fa-solid fa-rotate"></i> 今すぐ同期
+          </button>
+        </div>
+        <div id="sheet-sync-root">
+          <div class="empty-state">読み込み中...</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
             <div class="card-title"><i class="fa-solid fa-calendar-check"></i>今日の取込状況</div>
             <div class="card-subtitle">稼働中媒体のみ対象。停止中媒体は必要数に含めません。</div>
           </div>
@@ -124,10 +139,150 @@ export async function renderDataImportPage(container) {
       onUploadSuccess: () => refreshUploadPanels(container),
     })
 
+    container.querySelector('#sheet-sync-run-btn')?.addEventListener('click', () => runSheetSyncNow(container))
+
     refreshUploadPanels(container)
+    refreshSheetSyncStatus(container)
   }
 
   draw()
+}
+
+async function refreshSheetSyncStatus(container) {
+  const root = container.querySelector('#sheet-sync-root')
+  const button = container.querySelector('#sheet-sync-run-btn')
+  if (!root) return
+
+  try {
+    const res = await axios.get('/api/sheet-sync/status')
+    const status = res.data.data
+    root.innerHTML = renderSheetSyncStatus(status)
+    if (button) button.disabled = !status.enabled || status.latest_run?.status === 'running'
+  } catch (err) {
+    console.error(err)
+    root.innerHTML = `<div class="empty-state">同期状況を取得できませんでした</div>`
+  }
+}
+
+async function runSheetSyncNow(container) {
+  const button = container.querySelector('#sheet-sync-run-btn')
+  if (button) {
+    button.disabled = true
+    button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 同期中...'
+  }
+
+  try {
+    const res = await axios.post('/api/sheet-sync/run')
+    const outcome = res.data.data
+    const imported = outcome.results.filter((item) => item.status === 'imported').length
+    const message = `同期が終わりました（取込 ${imported} / ${outcome.results.length} タブ）`
+    showToast(message, outcome.status === 'success' ? 'success' : 'error')
+    window.dispatchEvent(new CustomEvent('adops:analysis-invalidated'))
+  } catch (err) {
+    console.error(err)
+    showToast(err.response?.data?.error || '同期に失敗しました', 'error')
+  } finally {
+    if (button) button.innerHTML = '<i class="fa-solid fa-rotate"></i> 今すぐ同期'
+    await Promise.all([
+      refreshSheetSyncStatus(container),
+      refreshUploadPanels(container),
+    ])
+  }
+}
+
+const SHEET_SYNC_RUN_STATUS = {
+  running: ['badge-paused', '実行中'],
+  success: ['badge-active', '成功'],
+  partial: ['badge-paused', '一部スキップ'],
+  failed: ['badge-danger', '失敗'],
+}
+
+const SHEET_SYNC_TAB_STATUS = {
+  imported: ['badge-active', '取込済'],
+  skipped: ['badge-paused', 'スキップ'],
+  failed: ['badge-danger', '失敗'],
+}
+
+const SOURCE_TYPE_LABELS = {
+  site_summary_csv: '媒体集計',
+  payment_report_csv: '決済レポート',
+}
+
+function renderStatusBadge(map, status) {
+  const [className, label] = map[status] || ['badge-inactive', status || '-']
+  return `<span class="badge ${className}">${escapeHtml(label)}</span>`
+}
+
+function renderSheetSyncStatus(status) {
+  if (!status.enabled) {
+    return `<div class="empty-state">スプレッドシート同期は無効です。設定画面の「スプレッドシート同期」で有効にしてください。</div>`
+  }
+
+  const run = status.latest_run
+  const range = status.sync_range
+  const trigger = run ? (run.trigger === 'cron' ? '定時' : '手動') : '-'
+
+  return `
+    <div class="import-summary-grid">
+      <div class="import-summary-box">
+        <div class="import-summary-label">最終同期</div>
+        <div class="import-summary-value small">${run ? `${formatDateTime(run.started_at)}（${trigger}）` : '未実行'}</div>
+      </div>
+      <div class="import-summary-box">
+        <div class="import-summary-label">状態</div>
+        <div class="import-summary-value small">${run ? renderStatusBadge(SHEET_SYNC_RUN_STATUS, run.status) : '-'}</div>
+      </div>
+      <div class="import-summary-box">
+        <div class="import-summary-label">同期する期間</div>
+        <div class="import-summary-value small">${escapeHtml(range.from)} 〜 ${escapeHtml(range.to)}</div>
+      </div>
+      <div class="import-summary-box">
+        <div class="import-summary-label">認証</div>
+        <div class="import-summary-value small">${status.has_credentials ? '設定済み' : '<span class="badge badge-danger">鍵が未登録</span>'}</div>
+      </div>
+    </div>
+    ${run?.error_message ? `<div class="sheet-sync-message">${escapeHtml(run.error_message)}</div>` : ''}
+    ${renderSheetSyncTabResults(status.tab_results || [])}
+  `
+}
+
+function renderSheetSyncTabResults(results) {
+  if (results.length === 0) return ''
+
+  const rows = results.map((item) => {
+    const target = item.source_type === 'ad_media_csv'
+      ? escapeHtml(item.media_name || '-')
+      : `${escapeHtml(item.data_source === 'INTERNAL' ? '自社' : 'YNS')} ${escapeHtml(SOURCE_TYPE_LABELS[item.source_type] || '')}`
+    const period = item.date_from ? `${escapeHtml(item.date_from)} 〜 ${escapeHtml(item.date_to)}` : '-'
+    return `
+      <tr>
+        <td>${target}</td>
+        <td>${escapeHtml(item.tab_name)}</td>
+        <td>${renderStatusBadge(SHEET_SYNC_TAB_STATUS, item.status)}</td>
+        <td>${item.status === 'imported' ? `${Number(item.row_count).toLocaleString('ja-JP')}行` : '-'}</td>
+        <td>${period}</td>
+        <td class="sheet-sync-reason">${item.reason ? escapeHtml(item.reason) : ''}</td>
+      </tr>
+    `
+  }).join('')
+
+  return `
+    <div class="table-scroll import-status-table">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>対象</th>
+            <th>タブ</th>
+            <th>結果</th>
+            <th>取込行数</th>
+            <th>期間</th>
+            <th>理由・注意</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `
 }
 
 async function refreshUploadPanels(container) {
@@ -252,6 +407,9 @@ function renderUploadHistory(list) {
         <td>${escapeHtml(item.media_name || '-')}</td>
         <td>${escapeHtml(item.file_name)}</td>
         <td>${Number(item.row_count).toLocaleString('ja-JP')}行</td>
+        <td>${item.import_method === 'sheet_sync'
+          ? '<span class="badge badge-paused">シート同期</span>'
+          : '<span class="badge badge-inactive">手動</span>'}</td>
         <td><span class="badge badge-active">success</span></td>
         <td>${formatDateTime(item.uploaded_at)}</td>
         <td>
@@ -273,6 +431,7 @@ function renderUploadHistory(list) {
             <th>媒体</th>
             <th>ファイル名</th>
             <th>行数</th>
+            <th>取込方法</th>
             <th>status</th>
             <th>取込日時</th>
             <th>操作</th>

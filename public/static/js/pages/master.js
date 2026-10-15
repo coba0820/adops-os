@@ -77,7 +77,13 @@ function drawShell(container) {
 // ============================================================
 async function renderMediaMaster(root) {
   root.innerHTML = `<div class="empty-state">読み込み中...</div>`
-  const list = await fetchList('/api/media')
+  const [list, sheetTabs] = await Promise.all([
+    fetchList('/api/media'),
+    fetchMediaSheetTabs(),
+  ])
+  list.forEach((media) => {
+    media.sheet_tab_name = sheetTabs.get(media.id) || ''
+  })
 
   root.innerHTML = `
     <div class="section-toolbar">
@@ -93,6 +99,26 @@ async function renderMediaMaster(root) {
 
 function normalizeMediaStatus(status) {
   return MEDIA_STATUS_VIEW[status] ? status : 'active'
+}
+
+// スプレッドシート同期で読み込むタブ名（媒体ID → タブ名）
+async function fetchMediaSheetTabs() {
+  try {
+    const res = await axios.get('/api/sheet-sync/sources')
+    const adMedia = res.data.data?.ad_media || []
+    return new Map(adMedia.map((row) => [row.media_id, row.tab_name || '']))
+  } catch (err) {
+    console.error(err)
+    return new Map()
+  }
+}
+
+async function saveMediaSheetTab(mediaId, tabName) {
+  return axios.put('/api/sheet-sync/sources', {
+    sources: [{ source_type: 'ad_media_csv', media_id: mediaId, tab_name: tabName }],
+  })
+    .then((r) => r.data)
+    .catch((e) => e.response?.data || { success: false })
 }
 
 function renderMediaStatusBadge(status) {
@@ -114,6 +140,7 @@ function renderMediaTable(list) {
         <td>${escapeHtml(m.media_name)}</td>
         <td>${escapeHtml(m.currency || 'JPY')}</td>
         <td>${renderMediaStatusBadge(status)}</td>
+        <td>${m.sheet_tab_name ? escapeHtml(m.sheet_tab_name) : '<span class="form-hint">同期対象外</span>'}</td>
         <td>
           <div class="action-btn-group">
             <button class="icon-btn" data-action="mapping" data-id="${m.id}" title="CSV列マッピング"><i class="fa-solid fa-table-columns"></i></button>
@@ -129,7 +156,7 @@ function renderMediaTable(list) {
   return `
     <div class="table-scroll">
       <table class="data-table">
-        <thead><tr><th>媒体ID</th><th>媒体名</th><th>通貨</th><th>状態</th><th style="width:130px">操作</th></tr></thead>
+        <thead><tr><th>媒体ID</th><th>媒体名</th><th>通貨</th><th>状態</th><th>読み込むタブ</th><th style="width:130px">操作</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -188,11 +215,17 @@ function openMediaModal(root, item) {
           <option value="USD" ${currentCurrency === 'USD' ? 'selected' : ''}>USD</option>
         </select>
       </div>
+      <div class="form-row">
+        <label class="form-label">読み込むタブ名</label>
+        <input type="text" id="modal-media-sheet-tab" class="form-input" value="${escapeHtml(item?.sheet_tab_name || '')}" placeholder="例 Taboola" />
+        <div class="form-hint">読み込み用スプレッドシートのタブ名。空欄なら自動同期の対象外です。</div>
+      </div>
     `,
     onConfirm: async () => {
       const name = document.getElementById('modal-media-name').value.trim()
       const status = document.getElementById('modal-media-status').value
       const currency = document.getElementById('modal-media-currency').value
+      const sheetTabName = document.getElementById('modal-media-sheet-tab').value.trim()
       if (!name) {
         showToast('媒体名を入力してください', 'error')
         return
@@ -202,6 +235,11 @@ function openMediaModal(root, item) {
         : await axios.post('/api/media', { media_name: name, status, currency }).then((r) => r.data).catch((e) => e.response.data)
 
       if (res.success) {
+        const mediaId = isEdit ? item.id : res.data?.id
+        if (mediaId && sheetTabName !== (item?.sheet_tab_name || '')) {
+          const tabRes = await saveMediaSheetTab(mediaId, sheetTabName)
+          if (!tabRes.success) showToast(tabRes.error || '読み込むタブ名の保存に失敗しました', 'error')
+        }
         closeModal()
         showToast(isEdit ? '更新しました' : '追加しました', 'success')
         renderMediaMaster(root)

@@ -1935,3 +1935,30 @@ button {
   color: var(--color-text-muted);
   font-size: 13px;
 }
+
+/* ------------------------------------------------------------
+   スプレッドシート同期
+------------------------------------------------------------ */
+.badge-danger {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.sheet-sync-message {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.sheet-sync-reason {
+  max-width: 420px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}

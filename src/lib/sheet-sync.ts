@@ -262,6 +262,35 @@ async function syncTab(
   }
 }
 
+// 定時実行（JST 8:00）より後、この時刻を過ぎても当日の同期がなければ警告する
+export const NOT_RUN_ALERT_HOUR_JST = 10
+
+export async function fetchSheetSyncAlertState(db: D1Database, settings: AppSettings, now = new Date()) {
+  const config = getSheetSyncSettings(settings)
+  if (!config.enabled) return null
+
+  try {
+    const latest = await db.prepare(
+      `SELECT status, error_message,
+              date(started_at, '+9 hours') = date('now', '+9 hours') AS ran_today
+       FROM sheet_sync_runs
+       ORDER BY id DESC
+       LIMIT 1`
+    ).first<{ status: SheetSyncRunStatus; error_message: string | null; ran_today: number }>()
+
+    const jstHour = new Date(now.getTime() + 9 * 60 * 60 * 1000).getUTCHours()
+    return {
+      latestStatus: latest?.status ?? null,
+      latestError: latest?.error_message ?? null,
+      ranToday: Boolean(latest?.ran_today),
+      notRunAlertDue: jstHour >= NOT_RUN_ALERT_HOUR_JST,
+    }
+  } catch (err) {
+    // sheet_sync 系 migration 未適用でもダッシュボードを壊さない
+    return null
+  }
+}
+
 export async function runSheetSync(
   env: SheetSyncEnv,
   trigger: SheetSyncTrigger,

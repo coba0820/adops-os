@@ -1592,7 +1592,7 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
   const { fileType, fileName } = input
   const dataSource = input.dataSource ?? 'YNS'
   const csvRows = input.rows
-  const rowCount = input.rowCount ?? countBodyRows(csvRows)
+  let rowCount = input.rowCount ?? countBodyRows(csvRows)
 
   const settings = await fetchAppSettings(db)
   if (!isUploadFileTypeEnabled(fileType, settings)) {
@@ -1810,12 +1810,16 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
     )
   }
 
+  const newRowCount = fileType === 'ad_media_csv'
+    ? preparedAdMediaRows.length
+    : fileType === 'site_summary_csv'
+      ? preparedMediaSummaryRows.length
+      : preparedPaymentReportRows.length
+
+  // 同期時の履歴の行数は、タブ全体ではなく期間内で取り込む行数にする
+  if (input.dateRange && input.rowCount === undefined) rowCount = newRowCount
+
   if (input.dateRange && input.minRowRatio && input.minRowRatio > 0) {
-    const newRowCount = fileType === 'ad_media_csv'
-      ? preparedAdMediaRows.length
-      : fileType === 'site_summary_csv'
-        ? preparedMediaSummaryRows.length
-        : preparedPaymentReportRows.length
     const existingRowCount = await countExistingRowsInRange(db, fileType, mediaId, dataSource, input.dateRange)
     if (existingRowCount > 0 && newRowCount < existingRowCount * input.minRowRatio) {
       throw new ImportError(

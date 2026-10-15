@@ -5,6 +5,7 @@
 import { Hono } from 'hono'
 import type { ApiResponse, Bindings, MediaStatus } from '../../types'
 import { fetchAppSettings } from '../../lib/settings'
+import { fetchSheetSyncAlertState } from '../../lib/sheet-sync'
 
 export const dashboardRoute = new Hono<{ Bindings: Bindings }>()
 
@@ -619,7 +620,8 @@ function buildAlerts(
   targets: TargetTotals,
   forecast: ReturnType<typeof buildForecastSummary>,
   uploadStatus: Awaited<ReturnType<typeof fetchUploadStatus>>,
-  settings: Awaited<ReturnType<typeof fetchAppSettings>>
+  settings: Awaited<ReturnType<typeof fetchAppSettings>>,
+  sheetSync: Awaited<ReturnType<typeof fetchSheetSyncAlertState>> = null
 ) {
   const alerts: DashboardAlert[] = []
   const currentCpa = divideOrNull(actual.cost, actual.registrations)
@@ -662,6 +664,27 @@ function buildAlerts(
       detail: '月末着地が設定した予算閾値を超える見込みです',
       route: 'forecast',
     })
+  }
+  if (sheetSync) {
+    if (
+      alertSettings.warn_sheet_sync_failed !== false &&
+      (sheetSync.latestStatus === 'failed' || sheetSync.latestStatus === 'partial')
+    ) {
+      alerts.push({
+        level: sheetSync.latestStatus === 'failed' ? 'critical' : 'warning',
+        title: sheetSync.latestStatus === 'failed' ? 'スプレッドシート同期失敗' : 'スプレッドシート同期で一部スキップ',
+        detail: sheetSync.latestError || '取り込まれなかったタブがあります。データ取込画面で理由を確認してください',
+        route: 'data-import',
+      })
+    }
+    if (alertSettings.warn_sheet_sync_not_run !== false && sheetSync.notRunAlertDue && !sheetSync.ranToday) {
+      alerts.push({
+        level: 'warning',
+        title: 'スプレッドシート同期未実行',
+        detail: '本日のスプレッドシート同期が実行されていません',
+        route: 'data-import',
+      })
+    }
   }
   if (
     (alertSettings.warn_missing_ad_media_csv !== false && uploadStatus.missingAdMedia.length > 0) ||
@@ -769,7 +792,8 @@ dashboardRoute.get('/summary', async (c) => {
     'site',
     multiplier
   )
-  const alerts = buildAlerts(monthlyActual, targets, forecast, uploadStatus, settings)
+  const sheetSyncAlertState = await fetchSheetSyncAlertState(c.env.DB, settings)
+  const alerts = buildAlerts(monthlyActual, targets, forecast, uploadStatus, settings, sheetSyncAlertState)
 
   const data = {
     generated_at: new Date().toISOString(),

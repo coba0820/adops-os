@@ -15,6 +15,8 @@ const FIELD_GROUPS = [
       { key: 'warn_missing_ad_media_csv', label: '広告媒体CSV未取込警告', type: 'boolean' },
       { key: 'warn_missing_site_summary_csv', label: '媒体集計CSV未取込警告', type: 'boolean' },
       { key: 'warn_missing_payment_report_csv', label: '決済レポートCSV未取込警告', type: 'boolean' },
+      { key: 'warn_sheet_sync_failed', label: 'スプレッドシート同期の失敗警告', type: 'boolean' },
+      { key: 'warn_sheet_sync_not_run', label: 'スプレッドシート同期の当日未実行警告', type: 'boolean' },
       { key: 'warn_zero_revenue', label: '売上0件警告', type: 'boolean' },
       { key: 'warn_zero_payer', label: '入金者0件警告', type: 'boolean' },
       { key: 'warn_recovery_drop', label: '回収率低下警告', type: 'boolean' },
@@ -59,6 +61,25 @@ const FIELD_GROUPS = [
       { key: 'enable_payment_report_csv', label: '決済レポートCSV取込', type: 'boolean' },
     ],
   },
+  {
+    title: 'スプレッドシート同期',
+    icon: 'fa-table',
+    group: 'sheet_sync',
+    subtitle: '読み込み用スプレッドシートから毎朝自動で取り込みます。広告媒体のタブ名はマスタ管理の媒体ごとに設定します。',
+    fields: [
+      { key: 'enabled', label: '自動同期を有効にする', type: 'boolean' },
+      { key: 'spreadsheet_id', label: 'スプレッドシートID（URLを貼り付けても可）', type: 'text', transform: 'spreadsheetId', placeholder: 'https://docs.google.com/spreadsheets/d/...' },
+      { key: 'months_to_sync', label: '同期する月数（当月を含む）', type: 'number', suffix: 'か月', step: '1' },
+      { key: 'min_row_ratio', label: '行数減少の許容率（置き換え前に対して）', type: 'number', suffix: '%以上', transform: 'percent', step: '1' },
+    ],
+  },
+]
+
+const SITE_SHEET_SOURCES = [
+  { source_type: 'site_summary_csv', data_source: 'YNS', label: 'YNS 媒体集計' },
+  { source_type: 'payment_report_csv', data_source: 'YNS', label: 'YNS 決済レポート' },
+  { source_type: 'site_summary_csv', data_source: 'INTERNAL', label: '自社 媒体集計' },
+  { source_type: 'payment_report_csv', data_source: 'INTERNAL', label: '自社 決済レポート' },
 ]
 
 let settingsSnapshot = null
@@ -67,12 +88,16 @@ export async function renderSettingsPage(container) {
   container.innerHTML = `<div class="card"><div class="empty-state">読み込み中...</div></div>`
 
   try {
-    const res = await axios.get('/api/settings')
+    const [res, sheetSources] = await Promise.all([
+      axios.get('/api/settings'),
+      fetchSiteSheetSources(),
+    ])
     const data = res.data.data
     settingsSnapshot = data
     container.innerHTML = `
       <div class="settings-stack">
         ${FIELD_GROUPS.map((section) => renderSettingsSection(section, data.settings)).join('')}
+        ${renderSiteSheetSources(sheetSources)}
         ${renderExchangeRates(data.exchange_rates)}
         ${renderImportPolicy(data.import_policies)}
         ${renderSystemInfo(data.system)}
@@ -87,6 +112,56 @@ export async function renderSettingsPage(container) {
     console.error(err)
     container.innerHTML = `<div class="card"><div class="empty-state">設定データの取得に失敗しました</div></div>`
   }
+}
+
+async function fetchSiteSheetSources() {
+  try {
+    const res = await axios.get('/api/sheet-sync/sources')
+    return res.data.data?.site || []
+  } catch (err) {
+    console.error(err)
+    return []
+  }
+}
+
+function renderSiteSheetSources(sources) {
+  const tabNameOf = (item) => sources.find(
+    (row) => row.source_type === item.source_type && row.data_source === item.data_source
+  )?.tab_name || ''
+
+  return `
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title"><i class="fa-solid fa-table-list"></i>スプレッドシート同期：サイト側のタブ名</div>
+          <div class="card-subtitle">空欄のものは同期しません。1行目は元のエクスポートと同じ列名にしてください。</div>
+        </div>
+      </div>
+      <div class="settings-grid">
+        ${SITE_SHEET_SOURCES.map((item) => `
+          <label class="settings-field">
+            <span>${escapeHtml(item.label)}</span>
+            <input type="text" class="form-input site-sheet-source" data-source-type="${item.source_type}" data-data-source="${item.data_source}" value="${escapeHtml(tabNameOf(item))}" />
+          </label>
+        `).join('')}
+      </div>
+    </div>
+  `
+}
+
+function collectSiteSheetSources(container) {
+  return [...container.querySelectorAll('.site-sheet-source')].map((input) => ({
+    source_type: input.dataset.sourceType,
+    data_source: input.dataset.dataSource,
+    tab_name: input.value.trim(),
+  }))
+}
+
+// URL が貼られた場合も ID だけを保存する
+function extractSpreadsheetId(value) {
+  const raw = String(value ?? '').trim()
+  const match = raw.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)
+  return match ? match[1] : raw
 }
 
 function renderExchangeRates(rates = []) {
@@ -153,7 +228,7 @@ function renderSettingsSection(section, settings) {
       <div class="card-header">
         <div>
           <div class="card-title"><i class="fa-solid ${section.icon}"></i>${section.title}</div>
-          <div class="card-subtitle">変更後は保存ボタンを押してください</div>
+          <div class="card-subtitle">${section.subtitle ? `${escapeHtml(section.subtitle)}<br>` : ''}変更後は保存ボタンを押してください</div>
         </div>
       </div>
       <div class="settings-grid">
@@ -189,11 +264,20 @@ function renderField(group, field, value) {
     `
   }
 
+  if (field.type === 'text') {
+    return `
+      <label class="settings-field" for="${inputId}">
+        <span>${field.label}</span>
+        <input id="${inputId}" type="text" class="form-input settings-input" ${attrs} value="${escapeHtml(value ?? '')}" placeholder="${escapeHtml(field.placeholder || '')}" />
+      </label>
+    `
+  }
+
   return `
     <label class="settings-field" for="${inputId}">
       <span>${field.label}</span>
       <div class="settings-number-wrap">
-        <input id="${inputId}" type="number" step="0.1" class="form-input settings-input" ${attrs} value="${formatDisplayValue(value, field.transform)}" />
+        <input id="${inputId}" type="number" step="${field.step || '0.1'}" class="form-input settings-input" ${attrs} value="${formatDisplayValue(value, field.transform)}" />
         ${field.suffix ? `<em>${field.suffix}</em>` : ''}
       </div>
     </label>
@@ -295,7 +379,10 @@ function bindSettingsEvents(container) {
     try {
       const payload = collectSettings(container)
       await axios.put('/api/settings', payload)
+      await axios.put('/api/sheet-sync/sources', { sources: collectSiteSheetSources(container) })
       showToast('設定を保存しました', 'success')
+      const spreadsheetInput = container.querySelector('#setting-sheet_sync-spreadsheet_id')
+      if (spreadsheetInput && payload.sheet_sync) spreadsheetInput.value = payload.sheet_sync.spreadsheet_id
       window.dispatchEvent(new CustomEvent('adops:settings-updated'))
     } catch (err) {
       console.error(err)
@@ -337,7 +424,9 @@ function collectSettings(container) {
       return
     }
 
-    payload[group][key] = input.value
+    payload[group][key] = input.dataset.transform === 'spreadsheetId'
+      ? extractSpreadsheetId(input.value)
+      : input.value
   })
   return payload
 }
