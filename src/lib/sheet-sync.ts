@@ -238,6 +238,7 @@ async function syncTab(
       dateRange: range,
       minRowRatio,
     })
+    if (imported.writeStats) logSyncInfo('tab rows written', { tab: source.tab_name, ...imported.writeStats })
 
     const warning = imported.warnings
       .map((item) => item.type === 'unregistered_ad_codes'

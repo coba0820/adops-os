@@ -1494,12 +1494,21 @@ export type ImportDateRange = {
 
 export type ImportTotals = Record<string, number>
 
+export type DiffWriteStats = {
+  inserted: number
+  updated: number
+  deleted: number
+  unchanged: number
+}
+
 export type ImportRowsResult = {
   uploadHistoryId: number
   rowCount: number
   dateRange: TargetDateRange | null
   totals: ImportTotals
   warnings: UploadWarning[]
+  // 同期時のみ：差分書き込みの内訳
+  writeStats?: DiffWriteStats
 }
 
 export class ImportError extends Error {
@@ -1557,24 +1566,186 @@ async function countExistingRowsInRange(
   return Number(row?.count ?? 0)
 }
 
-// 同期用：データソース単位で、期間内の他の取込の行をすべて削除する
-async function deleteOtherSourceRowsInRange(
+// ------------------------------------------------------------
+// 日次明細テーブルの列定義（手動取込の INSERT と同期の差分書き込みで共用）
+// keyColumns は各テーブルの UNIQUE INDEX と同じ列・同じ COALESCE の既定値
+// ------------------------------------------------------------
+type CellValue = string | number | null
+
+type DailyTableSpec<T> = {
+  table: 'ad_media_daily' | 'media_summary_daily' | 'payment_report_daily'
+  columns: string[]
+  keyColumns: Array<{ column: string; fallback: string | number }>
+  values: (row: T) => CellValue[]
+}
+
+const AD_MEDIA_DAILY_TABLE: DailyTableSpec<AdMediaDailyRow> = {
+  table: 'ad_media_daily',
+  columns: [
+    'target_date', 'media_id', 'account_name', 'account_id',
+    'campaign_name', 'campaign_id', 'clicks', 'served_ads',
+    'impressions', 'spend', 'media_cv', 'currency',
+  ],
+  keyColumns: [
+    { column: 'target_date', fallback: '' },
+    { column: 'media_id', fallback: '' },
+    { column: 'campaign_id', fallback: '' },
+  ],
+  values: (row) => [
+    row.targetDate, row.mediaId, row.accountName, row.accountId,
+    row.campaignName, row.campaignId, row.clicks, row.servedAds,
+    row.impressions, row.spend, row.mediaCv, row.currency,
+  ],
+}
+
+const MEDIA_SUMMARY_DAILY_TABLE: DailyTableSpec<MediaSummaryDailyRow> = {
+  table: 'media_summary_daily',
+  columns: [
+    'target_date', 'media_id', 'ad_code', 'site_name', 'access_count',
+    'registration_count', 'provisional_registration_count', 'data_source',
+  ],
+  keyColumns: [
+    { column: 'target_date', fallback: '' },
+    { column: 'media_id', fallback: -1 },
+    { column: 'ad_code', fallback: '' },
+    { column: 'data_source', fallback: 'YNS' },
+  ],
+  values: (row) => [
+    row.targetDate, row.mediaId, row.adCode, row.siteName, row.accessCount,
+    row.registrationCount, row.provisionalRegistrationCount, row.dataSource,
+  ],
+}
+
+const PAYMENT_REPORT_DAILY_TABLE: DailyTableSpec<PaymentReportDailyRow> = {
+  table: 'payment_report_daily',
+  columns: [
+    'registration_date', 'site_name', 'customer_id', 'ad_code',
+    'registration_status', 'first_payment_at', 'payment_count',
+    'payment_amount', 'media_type', 'media_id', 'data_source',
+  ],
+  keyColumns: [
+    { column: 'registration_date', fallback: '' },
+    { column: 'media_id', fallback: -1 },
+    { column: 'ad_code', fallback: '' },
+    { column: 'customer_id', fallback: '' },
+    { column: 'data_source', fallback: 'YNS' },
+  ],
+  values: (row) => [
+    row.registrationDate, row.siteName, row.customerId, row.adCode,
+    row.registrationStatus, row.firstPaymentAt, row.paymentCount,
+    row.paymentAmount, row.mediaType, row.mediaId, row.dataSource,
+  ],
+}
+
+function buildInsertStatement<T>(db: D1Database, spec: DailyTableSpec<T>, row: T, uploadHistoryId: number) {
+  const columns = [...spec.columns, 'upload_history_id']
+  return db.prepare(
+    `INSERT OR REPLACE INTO ${spec.table}
+       (${columns.join(', ')})
+     VALUES (${columns.map(() => '?').join(', ')})`
+  ).bind(...spec.values(row), uploadHistoryId)
+}
+
+async function insertDailyRows<T>(db: D1Database, spec: DailyTableSpec<T>, rows: T[], uploadHistoryId: number) {
+  for (let i = 0; i < rows.length; i += INSERT_BATCH_SIZE) {
+    const chunk = rows.slice(i, i + INSERT_BATCH_SIZE)
+    await db.batch(chunk.map((row) => buildInsertStatement(db, spec, row, uploadHistoryId)))
+  }
+}
+
+function normalizeCell(value: unknown): CellValue {
+  if (value === null || value === undefined) return null
+  return typeof value === 'number' ? value : String(value)
+}
+
+// DB の型（TEXT 列に数値を渡した場合など）の違いは文字列にそろえて比べる
+function isSameCell(a: CellValue, b: CellValue) {
+  if (a === null || b === null) return a === b
+  if (typeof a === typeof b) return a === b
+  return String(a) === String(b)
+}
+
+function buildRowKey<T>(spec: DailyTableSpec<T>, get: (column: string) => unknown) {
+  return JSON.stringify(spec.keyColumns.map(({ column, fallback }) => String(normalizeCell(get(column)) ?? fallback)))
+}
+
+const DELETE_ID_CHUNK_SIZE = 500
+
+// 同期用：scope（データソース／媒体 × 期間）の既存行と突き合わせ、変わった行だけを書き込む。
+// 結果は「scope 内を rows で丸ごと置き換える」のと同じになる。
+// 変わっていない行には書き込まないため、その行の upload_history_id は以前の取込のまま残る。
+async function writeDailyRowsDiff<T>(
   db: D1Database,
-  fileType: 'site_summary_csv' | 'payment_report_csv',
-  dataSource: UploadDataSource,
-  range: ImportDateRange,
+  spec: DailyTableSpec<T>,
+  rows: T[],
+  scope: { where: string; params: Array<string | number> },
   uploadHistoryId: number
-) {
-  const { table, dateColumn } = SOURCE_SCOPED_TABLES[fileType]
-  const result = await db.prepare(
-    `DELETE FROM ${table}
-     WHERE data_source = ?
-       AND ${dateColumn} BETWEEN ? AND ?
-       AND upload_history_id <> ?`
+): Promise<DiffWriteStats> {
+  const { results: existingRows } = await db.prepare(
+    `SELECT id, ${spec.columns.join(', ')}
+     FROM ${spec.table}
+     WHERE ${scope.where}`
   )
-    .bind(dataSource, range.from, range.to, uploadHistoryId)
-    .run()
-  return Number(result.meta?.changes ?? 0)
+    .bind(...scope.params)
+    .all<Record<string, unknown>>()
+
+  const existingByKey = new Map<string, Record<string, unknown>>()
+  existingRows.forEach((row) => existingByKey.set(buildRowKey(spec, (column) => row[column]), row))
+
+  // 同じキーの行が複数あれば後の行を採用する（INSERT OR REPLACE を順に実行した場合と同じ）
+  const incomingByKey = new Map<string, { row: T; values: CellValue[] }>()
+  rows.forEach((row) => {
+    const values = spec.values(row).map(normalizeCell)
+    incomingByKey.set(buildRowKey(spec, (column) => values[spec.columns.indexOf(column)]), { row, values })
+  })
+
+  const statements: D1PreparedStatement[] = []
+  const stats: DiffWriteStats = { inserted: 0, updated: 0, deleted: 0, unchanged: 0 }
+
+  for (const [key, incoming] of incomingByKey) {
+    const existing = existingByKey.get(key)
+    if (!existing) {
+      statements.push(buildInsertStatement(db, spec, incoming.row, uploadHistoryId))
+      stats.inserted++
+      continue
+    }
+
+    const changedIndexes = spec.columns
+      .map((column, index) => (isSameCell(normalizeCell(existing[column]), incoming.values[index]) ? -1 : index))
+      .filter((index) => index >= 0)
+
+    if (changedIndexes.length === 0) {
+      stats.unchanged++
+      continue
+    }
+
+    statements.push(
+      db.prepare(
+        `UPDATE ${spec.table}
+         SET ${changedIndexes.map((index) => `${spec.columns[index]} = ?`).join(', ')},
+             upload_history_id = ?
+         WHERE id = ?`
+      ).bind(...changedIndexes.map((index) => incoming.values[index]), uploadHistoryId, Number(existing.id))
+    )
+    stats.updated++
+  }
+
+  const staleIds = [...existingByKey]
+    .filter(([key]) => !incomingByKey.has(key))
+    .map(([, row]) => Number(row.id))
+  for (let i = 0; i < staleIds.length; i += DELETE_ID_CHUNK_SIZE) {
+    statements.push(
+      db.prepare(`DELETE FROM ${spec.table} WHERE id IN ${JSON_IN}`)
+        .bind(toJsonParam(staleIds.slice(i, i + DELETE_ID_CHUNK_SIZE)))
+    )
+  }
+  stats.deleted = staleIds.length
+
+  for (let i = 0; i < statements.length; i += INSERT_BATCH_SIZE) {
+    await db.batch(statements.slice(i, i + INSERT_BATCH_SIZE))
+  }
+
+  return stats
 }
 
 function sumBy<T>(rows: T[], pick: (row: T) => number) {
@@ -1848,14 +2019,13 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
     throw new ImportError('アップロード履歴IDを取得できませんでした', 500, 'save')
   }
 
-  // 同期時は「データに含まれる日付」ではなく指定期間全体を置き換える
-  const replaceRange: TargetDateRange | null = input.dateRange
-    ? { minDate: input.dateRange.from, maxDate: input.dateRange.to }
-    : null
+  // 同期時（input.dateRange あり）は「データに含まれる日付」ではなく指定期間全体を、
+  // 差分書き込み（writeDailyRowsDiff）で置き換える
 
   let savedRows = 0
   let dateRange: TargetDateRange | null = null
   let totals: ImportTotals = {}
+  let writeStats: DiffWriteStats | undefined
 
   try {
     if (fileType === 'ad_media_csv' && mediaId !== null) {
@@ -1869,44 +2039,25 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
         throw new Error('広告媒体CSVに保存対象の明細行がありません')
       }
 
-      for (let i = 0; i < preparedAdMediaRows.length; i += INSERT_BATCH_SIZE) {
-        const chunk = preparedAdMediaRows.slice(i, i + INSERT_BATCH_SIZE)
-        await db.batch(
-          chunk.map((row) =>
-            db.prepare(
-              `INSERT OR REPLACE INTO ad_media_daily
-                 (target_date, media_id, account_name, account_id,
-                  campaign_name, campaign_id, clicks, served_ads,
-                  impressions, spend, media_cv, currency, upload_history_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            ).bind(
-              row.targetDate,
-              row.mediaId,
-              row.accountName,
-              row.accountId,
-              row.campaignName,
-              row.campaignId,
-              row.clicks,
-              row.servedAds,
-              row.impressions,
-              row.spend,
-              row.mediaCv,
-              row.currency,
-              uploadHistoryId
-            )
-          )
-        )
+      if (input.dateRange) {
+        writeStats = await writeDailyRowsDiff(db, AD_MEDIA_DAILY_TABLE, preparedAdMediaRows, {
+          where: 'media_id = ? AND target_date BETWEEN ? AND ?',
+          params: [mediaId, input.dateRange.from, input.dateRange.to],
+        }, uploadHistoryId)
+        logUploadInfo('ad_media_daily diff written', { uploadHistoryId, mediaId, ...writeStats })
+      } else {
+        await insertDailyRows(db, AD_MEDIA_DAILY_TABLE, preparedAdMediaRows, uploadHistoryId)
+        logUploadInfo('ad_media_daily insert completed', {
+          uploadHistoryId,
+          savedRows,
+        })
       }
-      logUploadInfo('ad_media_daily insert completed', {
-        uploadHistoryId,
-        savedRows,
-      })
 
-      if (adMediaDateRange) {
+      if (adMediaDateRange && !input.dateRange) {
         await deleteOldAdMediaRowsInRange(
           db,
           mediaId,
-          replaceRange ?? adMediaDateRange,
+          adMediaDateRange,
           uploadHistoryId
         )
         logUploadInfo('ad_media_daily old rows cleaned', {
@@ -1940,51 +2091,21 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
         throw new Error('媒体集計CSVに保存対象の明細行がありません')
       }
 
-      for (let i = 0; i < preparedMediaSummaryRows.length; i += INSERT_BATCH_SIZE) {
-        const chunk = preparedMediaSummaryRows.slice(i, i + INSERT_BATCH_SIZE)
-        await db.batch(
-          chunk.map((row) =>
-            db.prepare(
-              `INSERT OR REPLACE INTO media_summary_daily
-                 (target_date, media_id, ad_code, site_name, access_count,
-                  registration_count, provisional_registration_count,
-                  data_source, upload_history_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            ).bind(
-              row.targetDate,
-              row.mediaId,
-              row.adCode,
-              row.siteName,
-              row.accessCount,
-              row.registrationCount,
-              row.provisionalRegistrationCount,
-              row.dataSource,
-              uploadHistoryId
-            )
-          )
-        )
-      }
-      logUploadInfo('media_summary_daily insert completed', {
-        uploadHistoryId,
-        savedRows,
-      })
-
-      if (replaceRange) {
-        const deletedRows = await deleteOtherSourceRowsInRange(
-          db,
-          'site_summary_csv',
-          dataSource,
-          input.dateRange!,
-          uploadHistoryId
-        )
-        logUploadInfo('media_summary_daily source rows replaced', {
+      if (input.dateRange) {
+        writeStats = await writeDailyRowsDiff(db, MEDIA_SUMMARY_DAILY_TABLE, preparedMediaSummaryRows, {
+          where: 'data_source = ? AND target_date BETWEEN ? AND ?',
+          params: [dataSource, input.dateRange.from, input.dateRange.to],
+        }, uploadHistoryId)
+        logUploadInfo('media_summary_daily diff written', { uploadHistoryId, dataSource, ...writeStats })
+      } else {
+        await insertDailyRows(db, MEDIA_SUMMARY_DAILY_TABLE, preparedMediaSummaryRows, uploadHistoryId)
+        logUploadInfo('media_summary_daily insert completed', {
           uploadHistoryId,
-          dataSource,
-          minTargetDate: replaceRange.minDate,
-          maxTargetDate: replaceRange.maxDate,
-          deletedRows,
+          savedRows,
         })
-      } else if (mediaSummaryDateRange) {
+      }
+
+      if (mediaSummaryDateRange && !input.dateRange) {
         await deleteOldMediaSummaryRowsInRange(
           db,
           preparedMediaSummaryRows,
@@ -2027,7 +2148,7 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
         throw new Error('決済レポートCSVに保存対象の明細行がありません')
       }
 
-      if (paymentReportDateRange && !replaceRange) {
+      if (paymentReportDateRange && !input.dateRange) {
         const cleanupResult = await deleteOldPaymentReportRowsInRange(
           db,
           preparedPaymentReportRows,
@@ -2045,52 +2166,17 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
         })
       }
 
-      for (let i = 0; i < preparedPaymentReportRows.length; i += INSERT_BATCH_SIZE) {
-        const chunk = preparedPaymentReportRows.slice(i, i + INSERT_BATCH_SIZE)
-        await db.batch(
-          chunk.map((row) =>
-            db.prepare(
-              `INSERT OR REPLACE INTO payment_report_daily
-                 (registration_date, site_name, customer_id, ad_code,
-                  registration_status, first_payment_at, payment_count,
-                  payment_amount, media_type, media_id, data_source, upload_history_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            ).bind(
-              row.registrationDate,
-              row.siteName,
-              row.customerId,
-              row.adCode,
-              row.registrationStatus,
-              row.firstPaymentAt,
-              row.paymentCount,
-              row.paymentAmount,
-              row.mediaType,
-              row.mediaId,
-              row.dataSource,
-              uploadHistoryId
-            )
-          )
-        )
-      }
-      logUploadInfo('payment_report_daily insert completed', {
-        uploadHistoryId,
-        savedRows,
-      })
-
-      if (replaceRange) {
-        const deletedRows = await deleteOtherSourceRowsInRange(
-          db,
-          'payment_report_csv',
-          dataSource,
-          input.dateRange!,
-          uploadHistoryId
-        )
-        logUploadInfo('payment_report_daily source rows replaced', {
+      if (input.dateRange) {
+        writeStats = await writeDailyRowsDiff(db, PAYMENT_REPORT_DAILY_TABLE, preparedPaymentReportRows, {
+          where: 'data_source = ? AND registration_date BETWEEN ? AND ?',
+          params: [dataSource, input.dateRange.from, input.dateRange.to],
+        }, uploadHistoryId)
+        logUploadInfo('payment_report_daily diff written', { uploadHistoryId, dataSource, ...writeStats })
+      } else {
+        await insertDailyRows(db, PAYMENT_REPORT_DAILY_TABLE, preparedPaymentReportRows, uploadHistoryId)
+        logUploadInfo('payment_report_daily insert completed', {
           uploadHistoryId,
-          dataSource,
-          minTargetDate: replaceRange.minDate,
-          maxTargetDate: replaceRange.maxDate,
-          deletedRows,
+          savedRows,
         })
       }
 
@@ -2121,5 +2207,6 @@ export async function importRows(db: D1Database, input: ImportRowsInput): Promis
     dateRange,
     totals,
     warnings: uploadWarnings,
+    writeStats,
   }
 }
