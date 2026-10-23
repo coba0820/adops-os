@@ -28,8 +28,16 @@ export function isUploadFileTypeEnabled(
   return true
 }
 
-const INSERT_BATCH_SIZE = 25
-const LOOKUP_BATCH_SIZE = 50
+// D1 への呼び出し回数を抑えるため、1回の batch にまとめる文の数（1文ずつの上限は D1 側で別途 100KB）
+const INSERT_BATCH_SIZE = 200
+
+// IN 句の値を JSON 配列1つで渡す（バインド変数の上限 100 個に関係なく1回の問い合わせで済む）
+// 使い方: `WHERE ad_code IN ${JSON_IN}` に `.bind(toJsonParam(values))`
+const JSON_IN = '(SELECT value FROM json_each(?))'
+
+function toJsonParam(values: Array<string | number>) {
+  return JSON.stringify(values)
+}
 
 export type UploadDataSource = 'YNS' | 'INTERNAL'
 
@@ -793,25 +801,17 @@ async function fetchRowsByTextKey<T extends Record<string, unknown>>(
   selectSql: string
 ) {
   const uniqueValues = uniqueStrings(values)
-  const rows: T[] = []
+  if (uniqueValues.length === 0) return [] as T[]
 
-  for (let i = 0; i < uniqueValues.length; i += LOOKUP_BATCH_SIZE) {
-    const chunk = uniqueValues.slice(i, i + LOOKUP_BATCH_SIZE)
-    if (chunk.length === 0) continue
+  const { results } = await db.prepare(
+    `${selectSql}
+     FROM ${tableName}
+     WHERE ${keyColumn} IN ${JSON_IN}`
+  )
+    .bind(toJsonParam(uniqueValues))
+    .all<T>()
 
-    const placeholders = chunk.map(() => '?').join(', ')
-    const { results } = await db.prepare(
-      `${selectSql}
-       FROM ${tableName}
-       WHERE ${keyColumn} IN (${placeholders})`
-    )
-      .bind(...chunk)
-      .all<T>()
-
-    rows.push(...results)
-  }
-
-  return rows
+  return results
 }
 
 async function getOrCreateUnspecifiedMediaId(db: D1Database) {
@@ -1029,8 +1029,8 @@ async function ensureCampaignsFromAdMediaRows(
   rows: AdMediaDailyRow[]
 ) {
   const campaignNames = uniqueStrings(rows.map((row) => row.campaignName))
-  for (let i = 0; i < campaignNames.length; i += LOOKUP_BATCH_SIZE) {
-    const chunk = campaignNames.slice(i, i + LOOKUP_BATCH_SIZE)
+  for (let i = 0; i < campaignNames.length; i += INSERT_BATCH_SIZE) {
+    const chunk = campaignNames.slice(i, i + INSERT_BATCH_SIZE)
     await db.batch(
       chunk.map((campaignName) =>
         db.prepare(
@@ -1070,47 +1070,42 @@ async function deleteOldMediaSummaryRowsInRange(
 ) {
   const mediaIds = uniqueNumbers(rows.map((row) => row.mediaId))
   const dataSources = [...new Set(rows.map((row) => row.dataSource))]
-  for (let i = 0; i < mediaIds.length; i += LOOKUP_BATCH_SIZE) {
-    const chunk = mediaIds.slice(i, i + LOOKUP_BATCH_SIZE)
-    if (chunk.length === 0) continue
-
-    const placeholders = chunk.map(() => '?').join(', ')
-    for (const dataSource of dataSources) {
-      await db.prepare(
-        `DELETE FROM media_summary_daily
-         WHERE target_date BETWEEN ? AND ?
-           AND media_id IN (${placeholders})
-           AND data_source = ?
-           AND upload_history_id <> ?`
-      )
-        .bind(range.minDate, range.maxDate, ...chunk, dataSource, uploadHistoryId)
-        .run()
-    }
-  }
-
   const unlinkedAdCodes = uniqueStrings(
     rows
       .filter((row) => row.mediaId === null)
       .map((row) => row.adCode)
   )
-  for (let i = 0; i < unlinkedAdCodes.length; i += LOOKUP_BATCH_SIZE) {
-    const chunk = unlinkedAdCodes.slice(i, i + LOOKUP_BATCH_SIZE)
-    if (chunk.length === 0) continue
 
-    const placeholders = chunk.map(() => '?').join(', ')
-    for (const dataSource of dataSources) {
-      await db.prepare(
-        `DELETE FROM media_summary_daily
-         WHERE target_date BETWEEN ? AND ?
-           AND media_id IS NULL
-           AND ad_code IN (${placeholders})
-           AND data_source = ?
-           AND upload_history_id <> ?`
+  const statements: D1PreparedStatement[] = []
+  for (const dataSource of dataSources) {
+    if (mediaIds.length > 0) {
+      statements.push(
+        db.prepare(
+          `DELETE FROM media_summary_daily
+           WHERE target_date BETWEEN ? AND ?
+             AND media_id IN ${JSON_IN}
+             AND data_source = ?
+             AND upload_history_id <> ?`
+        )
+          .bind(range.minDate, range.maxDate, toJsonParam(mediaIds), dataSource, uploadHistoryId)
       )
-        .bind(range.minDate, range.maxDate, ...chunk, dataSource, uploadHistoryId)
-        .run()
+    }
+    if (unlinkedAdCodes.length > 0) {
+      statements.push(
+        db.prepare(
+          `DELETE FROM media_summary_daily
+           WHERE target_date BETWEEN ? AND ?
+             AND media_id IS NULL
+             AND ad_code IN ${JSON_IN}
+             AND data_source = ?
+             AND upload_history_id <> ?`
+        )
+          .bind(range.minDate, range.maxDate, toJsonParam(unlinkedAdCodes), dataSource, uploadHistoryId)
+      )
     }
   }
+
+  if (statements.length > 0) await db.batch(statements)
 }
 
 async function fetchExchangeRates(db: D1Database) {
@@ -1160,44 +1155,46 @@ async function deleteOldPaymentReportRowsInRange(
   let deletedNullMediaRows = 0
   const mediaIds = uniqueNumbers(rows.map((row) => row.mediaId))
   const dataSources = [...new Set(rows.map((row) => row.dataSource))]
-  for (let i = 0; i < mediaIds.length; i += LOOKUP_BATCH_SIZE) {
-    const chunk = mediaIds.slice(i, i + LOOKUP_BATCH_SIZE)
-    if (chunk.length === 0) continue
+  const targetAdCodes = uniqueStrings(rows.map((row) => row.adCode))
 
-    const placeholders = chunk.map(() => '?').join(', ')
-    for (const dataSource of dataSources) {
-      const result = await db.prepare(
-        `DELETE FROM payment_report_daily
-         WHERE registration_date BETWEEN ? AND ?
-           AND media_id IN (${placeholders})
-           AND data_source = ?
-           AND upload_history_id <> ?`
-      )
-        .bind(range.minDate, range.maxDate, ...chunk, dataSource, uploadHistoryId)
-        .run()
-      deletedLinkedMediaRows += Number(result.meta?.changes ?? 0)
+  const statements: Array<{ kind: 'linked' | 'null'; statement: D1PreparedStatement }> = []
+  for (const dataSource of dataSources) {
+    if (mediaIds.length > 0) {
+      statements.push({
+        kind: 'linked',
+        statement: db.prepare(
+          `DELETE FROM payment_report_daily
+           WHERE registration_date BETWEEN ? AND ?
+             AND media_id IN ${JSON_IN}
+             AND data_source = ?
+             AND upload_history_id <> ?`
+        )
+          .bind(range.minDate, range.maxDate, toJsonParam(mediaIds), dataSource, uploadHistoryId),
+      })
+    }
+    if (targetAdCodes.length > 0) {
+      statements.push({
+        kind: 'null',
+        statement: db.prepare(
+          `DELETE FROM payment_report_daily
+           WHERE registration_date BETWEEN ? AND ?
+             AND media_id IS NULL
+             AND ad_code IN ${JSON_IN}
+             AND data_source = ?
+             AND upload_history_id <> ?`
+        )
+          .bind(range.minDate, range.maxDate, toJsonParam(targetAdCodes), dataSource, uploadHistoryId),
+      })
     }
   }
 
-  const targetAdCodes = uniqueStrings(rows.map((row) => row.adCode))
-  for (let i = 0; i < targetAdCodes.length; i += LOOKUP_BATCH_SIZE) {
-    const chunk = targetAdCodes.slice(i, i + LOOKUP_BATCH_SIZE)
-    if (chunk.length === 0) continue
-
-    const placeholders = chunk.map(() => '?').join(', ')
-    for (const dataSource of dataSources) {
-      const result = await db.prepare(
-        `DELETE FROM payment_report_daily
-         WHERE registration_date BETWEEN ? AND ?
-           AND media_id IS NULL
-           AND ad_code IN (${placeholders})
-           AND data_source = ?
-           AND upload_history_id <> ?`
-      )
-        .bind(range.minDate, range.maxDate, ...chunk, dataSource, uploadHistoryId)
-        .run()
-      deletedNullMediaRows += Number(result.meta?.changes ?? 0)
-    }
+  if (statements.length > 0) {
+    const results = await db.batch(statements.map((item) => item.statement))
+    results.forEach((result, index) => {
+      const changes = Number(result.meta?.changes ?? 0)
+      if (statements[index].kind === 'linked') deletedLinkedMediaRows += changes
+      else deletedNullMediaRows += changes
+    })
   }
 
   return {
@@ -1318,19 +1315,15 @@ async function resolveMediaIdsByAdCode(db: D1Database, adCodes: string[]) {
   const uniqueAdCodes = [...new Set(adCodes.map((adCode) => adCode.trim()).filter(Boolean))]
   const mediaIdSets = new Map<string, Set<number>>()
 
-  for (let i = 0; i < uniqueAdCodes.length; i += LOOKUP_BATCH_SIZE) {
-    const chunk = uniqueAdCodes.slice(i, i + LOOKUP_BATCH_SIZE)
-    if (chunk.length === 0) continue
-
-    const placeholders = chunk.map(() => '?').join(', ')
+  if (uniqueAdCodes.length > 0) {
     const { results } = await db.prepare(
       `SELECT c.ad_code, c.media_id
        FROM campaign_master c
        INNER JOIN media_master m ON c.media_id = m.id
        WHERE m.status = 'active'
-         AND c.ad_code IN (${placeholders})`
+         AND c.ad_code IN ${JSON_IN}`
     )
-      .bind(...chunk)
+      .bind(toJsonParam(uniqueAdCodes))
       .all<{ ad_code: string; media_id: number }>()
 
     for (const row of results) {
