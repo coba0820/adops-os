@@ -17,6 +17,7 @@ const FIELD_GROUPS = [
       { key: 'warn_missing_payment_report_csv', label: '決済レポートCSV未取込警告', type: 'boolean' },
       { key: 'warn_sheet_sync_failed', label: 'スプレッドシート同期の失敗警告', type: 'boolean' },
       { key: 'warn_sheet_sync_not_run', label: 'スプレッドシート同期の当日未実行警告', type: 'boolean' },
+      { key: 'warn_sheet_sync_missing_sheet', label: '当月のスプレッドシート未登録警告', type: 'boolean' },
       { key: 'warn_zero_revenue', label: '売上0件警告', type: 'boolean' },
       { key: 'warn_zero_payer', label: '入金者0件警告', type: 'boolean' },
       { key: 'warn_recovery_drop', label: '回収率低下警告', type: 'boolean' },
@@ -65,10 +66,9 @@ const FIELD_GROUPS = [
     title: 'スプレッドシート同期',
     icon: 'fa-table',
     group: 'sheet_sync',
-    subtitle: '読み込み用スプレッドシートから毎朝自動で取り込みます。広告媒体のタブ名はマスタ管理の媒体ごとに設定します。',
+    subtitle: '月ごとに登録した読み込み用スプレッドシートから毎朝自動で取り込みます。広告媒体のタブ名はマスタ管理の媒体ごとに設定します。',
     fields: [
       { key: 'enabled', label: '自動同期を有効にする', type: 'boolean' },
-      { key: 'spreadsheet_id', label: 'スプレッドシートID（URLを貼り付けても可）', type: 'text', transform: 'spreadsheetId', placeholder: 'https://docs.google.com/spreadsheets/d/...' },
       { key: 'months_to_sync', label: '同期する月数（当月を含む）', type: 'number', suffix: 'か月', step: '1' },
       { key: 'min_row_ratio', label: '行数減少の許容率（置き換え前に対して）', type: 'number', suffix: '%以上', transform: 'percent', step: '1' },
     ],
@@ -88,15 +88,17 @@ export async function renderSettingsPage(container) {
   container.innerHTML = `<div class="card"><div class="empty-state">読み込み中...</div></div>`
 
   try {
-    const [res, sheetSources] = await Promise.all([
+    const [res, sheetSources, monthlySheets] = await Promise.all([
       axios.get('/api/settings'),
       fetchSiteSheetSources(),
+      fetchMonthlySpreadsheets(),
     ])
     const data = res.data.data
     settingsSnapshot = data
     container.innerHTML = `
       <div class="settings-stack">
         ${FIELD_GROUPS.map((section) => renderSettingsSection(section, data.settings)).join('')}
+        ${renderMonthlySpreadsheets(monthlySheets)}
         ${renderSiteSheetSources(sheetSources)}
         ${renderExchangeRates(data.exchange_rates)}
         ${renderImportPolicy(data.import_policies)}
@@ -157,11 +159,139 @@ function collectSiteSheetSources(container) {
   }))
 }
 
-// URL が貼られた場合も ID だけを保存する
-function extractSpreadsheetId(value) {
-  const raw = String(value ?? '').trim()
-  const match = raw.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)
-  return match ? match[1] : raw
+async function fetchMonthlySpreadsheets() {
+  try {
+    const res = await axios.get('/api/sheet-sync/spreadsheets')
+    return res.data.data || { current_month: '', spreadsheets: [] }
+  } catch (err) {
+    console.error(err)
+    return { current_month: '', spreadsheets: [] }
+  }
+}
+
+function spreadsheetLink(item) {
+  const href = item.spreadsheet_url && /^https:\/\//.test(item.spreadsheet_url)
+    ? item.spreadsheet_url
+    : `https://docs.google.com/spreadsheets/d/${encodeURIComponent(item.spreadsheet_id)}`
+  return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(item.spreadsheet_id)}</a>`
+}
+
+function renderMonthlySpreadsheets({ current_month: currentMonth, spreadsheets }) {
+  const hasCurrent = spreadsheets.some((item) => item.target_month === currentMonth)
+  const rows = spreadsheets.length === 0
+    ? `<tr><td colspan="3">まだ登録されていません</td></tr>`
+    : spreadsheets.map((item) => `
+      <tr>
+        <td>${escapeHtml(item.target_month)}${item.target_month === currentMonth ? ' <span class="badge badge-active">当月</span>' : ''}</td>
+        <td>${spreadsheetLink(item)}</td>
+        <td>
+          <button class="btn btn-secondary btn-sm" data-action="test-spreadsheet" data-url="${escapeHtml(item.spreadsheet_url || item.spreadsheet_id)}" type="button"><i class="fa-solid fa-plug"></i>接続テスト</button>
+          <button class="icon-btn danger" data-action="delete-spreadsheet" data-month="${escapeHtml(item.target_month)}" title="削除" type="button">
+            <i class="fa-solid fa-trash"></i>
+          </button>
+        </td>
+      </tr>
+    `).join('')
+
+  return `
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title"><i class="fa-solid fa-calendar-days"></i>スプレッドシート同期：月ごとのスプレッドシート</div>
+          <div class="card-subtitle">対象月ごとに読み込み用スプレッドシートを登録します。同期では、各月をその月のシートから読み、その月の範囲だけを置き換えます。タブ名は全月共通です。</div>
+        </div>
+      </div>
+      ${hasCurrent ? '' : `<div class="sheet-sync-message">当月（${escapeHtml(currentMonth)}）のスプレッドシートが未登録です。当月分は同期されません。</div>`}
+      <div class="settings-grid">
+        <label class="settings-field">
+          <span>対象月</span>
+          <input id="monthly-sheet-month" type="month" class="form-input" value="${escapeHtml(currentMonth)}" />
+        </label>
+        <label class="settings-field">
+          <span>スプレッドシートのURL</span>
+          <input id="monthly-sheet-url" type="text" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/..." />
+        </label>
+        <label class="settings-field">
+          <span>&nbsp;</span>
+          <span class="settings-inline-actions">
+            <button class="btn btn-secondary" id="monthly-sheet-test" type="button"><i class="fa-solid fa-plug"></i>接続テスト</button>
+            <button class="btn btn-primary" id="monthly-sheet-save" type="button"><i class="fa-solid fa-floppy-disk"></i>登録</button>
+          </span>
+        </label>
+      </div>
+      <div id="monthly-sheet-test-result"></div>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr><th style="width:140px">対象月</th><th>スプレッドシート</th><th style="width:200px">操作</th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+  `
+}
+
+const CONNECTION_TAB_STATUS = {
+  ok: ['badge-active', 'OK'],
+  missing: ['badge-danger', 'タブなし'],
+  empty_header: ['badge-paused', '1行目が空'],
+}
+
+function renderConnectionResult(result) {
+  const head = result.ok
+    ? `<div class="sheet-sync-message ok"><i class="fa-solid fa-circle-check"></i> 接続できました${result.spreadsheet_title ? `（${escapeHtml(result.spreadsheet_title)}）` : ''}。同期するタブはすべてそろっています。</div>`
+    : `<div class="sheet-sync-message"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(result.message || '確認できない項目があります')}${result.spreadsheet_title ? `（${escapeHtml(result.spreadsheet_title)}）` : ''}</div>`
+  if (!result.tabs?.length) return head
+
+  return `
+    ${head}
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead><tr><th>対象</th><th>タブ名</th><th>結果</th><th>1行目の列数</th></tr></thead>
+        <tbody>
+          ${result.tabs.map((tab) => {
+            const [className, label] = CONNECTION_TAB_STATUS[tab.status] || ['badge-inactive', tab.status]
+            return `
+              <tr>
+                <td>${escapeHtml(tab.label)}</td>
+                <td>${escapeHtml(tab.tab_name)}</td>
+                <td><span class="badge ${className}">${escapeHtml(label)}</span></td>
+                <td>${tab.status === 'missing' ? '-' : tab.header_columns}</td>
+              </tr>
+            `
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `
+}
+
+async function testSpreadsheetConnection(container, url, button) {
+  const resultRoot = container.querySelector('#monthly-sheet-test-result')
+  if (!resultRoot) return
+  if (!url.trim()) {
+    showToast('スプレッドシートのURLを入力してください', 'error')
+    return
+  }
+
+  const originalHtml = button?.innerHTML
+  if (button) {
+    button.disabled = true
+    button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>確認中...'
+  }
+  try {
+    const res = await axios.post('/api/sheet-sync/spreadsheets/test', { url })
+    resultRoot.innerHTML = renderConnectionResult(res.data.data)
+  } catch (err) {
+    console.error(err)
+    resultRoot.innerHTML = renderConnectionResult({ ok: false, message: err.response?.data?.error || '接続テストに失敗しました', tabs: [] })
+  } finally {
+    if (button) {
+      button.disabled = false
+      button.innerHTML = originalHtml
+    }
+  }
 }
 
 function renderExchangeRates(rates = []) {
@@ -343,6 +473,42 @@ function renderSystemInfo(system) {
 }
 
 function bindSettingsEvents(container) {
+  container.querySelector('#monthly-sheet-test')?.addEventListener('click', (event) => {
+    testSpreadsheetConnection(container, container.querySelector('#monthly-sheet-url')?.value || '', event.currentTarget)
+  })
+
+  container.querySelectorAll('[data-action="test-spreadsheet"]').forEach((btn) => {
+    btn.addEventListener('click', () => testSpreadsheetConnection(container, btn.dataset.url || '', btn))
+  })
+
+  container.querySelector('#monthly-sheet-save')?.addEventListener('click', async () => {
+    const targetMonth = container.querySelector('#monthly-sheet-month')?.value || ''
+    const url = container.querySelector('#monthly-sheet-url')?.value || ''
+    try {
+      await axios.put('/api/sheet-sync/spreadsheets', { target_month: targetMonth, url })
+      showToast(`${targetMonth} のスプレッドシートを登録しました`, 'success')
+      renderSettingsPage(container)
+    } catch (err) {
+      console.error(err)
+      showToast(err.response?.data?.error || 'スプレッドシートの登録に失敗しました', 'error')
+    }
+  })
+
+  container.querySelectorAll('[data-action="delete-spreadsheet"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const month = btn.dataset.month
+      if (!window.confirm(`${month} のスプレッドシートの登録を削除しますか？（取り込み済みのデータは削除されません）`)) return
+      try {
+        await axios.delete(`/api/sheet-sync/spreadsheets/${encodeURIComponent(month)}`)
+        showToast(`${month} の登録を削除しました`, 'success')
+        renderSettingsPage(container)
+      } catch (err) {
+        console.error(err)
+        showToast(err.response?.data?.error || '登録の削除に失敗しました', 'error')
+      }
+    })
+  })
+
   container.querySelector('#exchange-save')?.addEventListener('click', async () => {
     try {
       const targetMonth = container.querySelector('#exchange-target-month')?.value
@@ -381,8 +547,6 @@ function bindSettingsEvents(container) {
       await axios.put('/api/settings', payload)
       await axios.put('/api/sheet-sync/sources', { sources: collectSiteSheetSources(container) })
       showToast('設定を保存しました', 'success')
-      const spreadsheetInput = container.querySelector('#setting-sheet_sync-spreadsheet_id')
-      if (spreadsheetInput && payload.sheet_sync) spreadsheetInput.value = payload.sheet_sync.spreadsheet_id
       window.dispatchEvent(new CustomEvent('adops:settings-updated'))
     } catch (err) {
       console.error(err)
@@ -424,9 +588,7 @@ function collectSettings(container) {
       return
     }
 
-    payload[group][key] = input.dataset.transform === 'spreadsheetId'
-      ? extractSpreadsheetId(input.value)
-      : input.value
+    payload[group][key] = input.value
   })
   return payload
 }

@@ -1955,6 +1955,25 @@ button {
   white-space: pre-wrap;
 }
 
+.sheet-sync-message.ok {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.settings-inline-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sheet-sync-months {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
 .sheet-sync-reason {
   max-width: 420px;
   color: var(--color-text-secondary);

@@ -5,7 +5,7 @@
 // ============================================================
 import type { UploadFileType } from '../types'
 import { fetchAppSettings, type AppSettings } from './settings'
-import { extractSpreadsheetId, fetchSheetTabs, type SheetTabValues } from './google-sheets'
+import { fetchSheetTabs, type SheetTabValues, type SpreadsheetOverview } from './google-sheets'
 import {
   ImportError,
   importRows,
@@ -25,7 +25,7 @@ export type SheetSyncEnv = {
 }
 
 // 取得済みの行データを渡せるようにしておく（ローカル検証・テスト用）
-export type SheetTabFetcher = (spreadsheetId: string, tabNames: string[]) => Promise<SheetTabValues>
+export type SheetTabFetcher = (spreadsheetId: string, tabNames: string[], targetMonth: string) => Promise<SheetTabValues>
 
 export type SheetSyncSource = {
   id: number
@@ -40,6 +40,7 @@ export type SheetSyncSource = {
 
 export type SheetSyncTabResult = {
   source_id: number
+  target_month: string
   tab_name: string
   status: SheetSyncTabStatus
   row_count: number
@@ -95,10 +96,45 @@ export function getSheetSyncSettings(settings: AppSettings) {
   const group = settings.sheet_sync ?? {}
   return {
     enabled: group.enabled === true,
-    spreadsheetId: extractSpreadsheetId(group.spreadsheet_id),
     monthsToSync: Number(group.months_to_sync) || 2,
     minRowRatio: Number(group.min_row_ratio ?? 0.5),
   }
+}
+
+export function currentJstMonth(now = new Date()) {
+  return toYmd(new Date(now.getTime() + 9 * 60 * 60 * 1000)).slice(0, 7)
+}
+
+export const TARGET_MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/
+
+// 期間を月ごとに分ける（例：2026-09-01〜2026-10-23 → 9月分・10月分）
+export function splitRangeByMonth(range: ImportDateRange): Array<ImportDateRange & { month: string }> {
+  const parts: Array<ImportDateRange & { month: string }> = []
+  let cursor = range.from
+  while (cursor <= range.to) {
+    const [year, month] = cursor.split('-').map(Number)
+    const lastDay = toYmd(new Date(Date.UTC(year, month, 0)))
+    const to = lastDay < range.to ? lastDay : range.to
+    parts.push({ month: cursor.slice(0, 7), from: cursor, to })
+    cursor = toYmd(new Date(Date.UTC(year, month, 1)))
+  }
+  return parts
+}
+
+export type MonthlySpreadsheet = {
+  target_month: string
+  spreadsheet_id: string
+  spreadsheet_url: string
+  updated_at: string | null
+}
+
+export async function fetchMonthlySpreadsheets(db: D1Database) {
+  const { results } = await db.prepare(
+    `SELECT target_month, spreadsheet_id, spreadsheet_url, updated_at
+     FROM sheet_sync_spreadsheets
+     ORDER BY target_month DESC`
+  ).all<MonthlySpreadsheet>()
+  return results
 }
 
 export function findSheetErrorValue(rows: CsvRows) {
@@ -128,7 +164,7 @@ export async function fetchSyncSources(db: D1Database) {
 }
 
 // 同期対象：タブ名あり・有効・（広告媒体は稼働中）・取込種別が設定で有効
-function selectTargetSources(sources: SheetSyncSource[], settings: AppSettings) {
+export function selectTargetSources(sources: SheetSyncSource[], settings: AppSettings) {
   return sources.filter((source) => {
     if (!source.is_active || !source.tab_name.trim()) return false
     if (!isUploadFileTypeEnabled(source.source_type, settings)) return false
@@ -139,7 +175,7 @@ function selectTargetSources(sources: SheetSyncSource[], settings: AppSettings) 
   })
 }
 
-function sourceLabel(source: SheetSyncSource) {
+export function sourceLabel(source: SheetSyncSource) {
   if (source.source_type === 'ad_media_csv') return source.media_name ?? `媒体#${source.media_id}`
   return SITE_SYNC_SOURCES.find(
     (item) => item.source_type === source.source_type && item.data_source === source.data_source
@@ -185,12 +221,13 @@ async function finishRun(db: D1Database, runId: number, status: SheetSyncRunStat
 async function saveTabResult(db: D1Database, runId: number, result: SheetSyncTabResult) {
   await db.prepare(
     `INSERT INTO sheet_sync_tab_results
-       (run_id, source_id, tab_name, status, row_count, date_from, date_to, reason, upload_history_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (run_id, source_id, target_month, tab_name, status, row_count, date_from, date_to, reason, upload_history_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       runId,
       result.source_id,
+      result.target_month,
       result.tab_name,
       result.status,
       result.row_count,
@@ -202,21 +239,26 @@ async function saveTabResult(db: D1Database, runId: number, result: SheetSyncTab
     .run()
 }
 
-async function syncTab(
-  db: D1Database,
-  source: SheetSyncSource,
-  rows: CsvRows | null | undefined,
-  range: ImportDateRange,
-  minRowRatio: number
-): Promise<SheetSyncTabResult> {
-  const base = {
+function baseTabResult(source: SheetSyncSource, targetMonth: string) {
+  return {
     source_id: source.id,
+    target_month: targetMonth,
     tab_name: source.tab_name,
     row_count: 0,
     date_from: null,
     date_to: null,
     upload_history_id: null,
   }
+}
+
+async function syncTab(
+  db: D1Database,
+  source: SheetSyncSource,
+  rows: CsvRows | null | undefined,
+  range: ImportDateRange & { month: string },
+  minRowRatio: number
+): Promise<SheetSyncTabResult> {
+  const base = baseTabResult(source, range.month)
   const skip = (reason: string): SheetSyncTabResult => ({ ...base, status: 'skipped', reason })
 
   if (!rows) return skip('タブが見つかりません')
@@ -263,6 +305,55 @@ async function syncTab(
   }
 }
 
+// ------------------------------------------------------------
+// 接続テスト：同期対象のタブがすべてシートにあり、1行目（ヘッダー）が入っているか
+// ------------------------------------------------------------
+export type ConnectionTestTab = {
+  label: string
+  tab_name: string
+  status: 'ok' | 'missing' | 'empty_header'
+  header_columns: number
+}
+
+export type ConnectionTestReport = {
+  ok: boolean
+  spreadsheet_title: string
+  message: string | null
+  tabs: ConnectionTestTab[]
+}
+
+export function buildConnectionReport(sources: SheetSyncSource[], overview: SpreadsheetOverview): ConnectionTestReport {
+  const existing = new Set(overview.sheetTitles)
+  const tabs = sources.map((source): ConnectionTestTab => {
+    const header = overview.headers.get(source.tab_name) ?? []
+    const headerColumns = header.filter((cell) => cell.trim() !== '').length
+    return {
+      label: sourceLabel(source),
+      tab_name: source.tab_name,
+      status: !existing.has(source.tab_name) ? 'missing' : headerColumns === 0 ? 'empty_header' : 'ok',
+      header_columns: headerColumns,
+    }
+  })
+
+  const missing = tabs.filter((tab) => tab.status === 'missing').length
+  const emptyHeader = tabs.filter((tab) => tab.status === 'empty_header').length
+  const message = sources.length === 0
+    ? '同期するタブ名が設定されていません（媒体マスタ・設定画面でタブ名を設定してください）'
+    : missing + emptyHeader > 0
+      ? [
+        missing > 0 ? `見つからないタブが${missing}件あります` : '',
+        emptyHeader > 0 ? `1行目（ヘッダー）が空のタブが${emptyHeader}件あります` : '',
+      ].filter(Boolean).join('／')
+      : null
+
+  return {
+    ok: sources.length > 0 && missing + emptyHeader === 0,
+    spreadsheet_title: overview.title,
+    message,
+    tabs,
+  }
+}
+
 // 定時実行（JST 8:00）より後、この時刻を過ぎても当日の同期がなければ警告する
 export const NOT_RUN_ALERT_HOUR_JST = 10
 
@@ -279,12 +370,21 @@ export async function fetchSheetSyncAlertState(db: D1Database, settings: AppSett
        LIMIT 1`
     ).first<{ status: SheetSyncRunStatus; error_message: string | null; ran_today: number }>()
 
+    const currentMonth = currentJstMonth(now)
+    const currentSheet = await db.prepare(
+      `SELECT 1 AS found FROM sheet_sync_spreadsheets WHERE target_month = ?`
+    )
+      .bind(currentMonth)
+      .first<{ found: number }>()
+
     const jstHour = new Date(now.getTime() + 9 * 60 * 60 * 1000).getUTCHours()
     return {
       latestStatus: latest?.status ?? null,
       latestError: latest?.error_message ?? null,
       ranToday: Boolean(latest?.ran_today),
       notRunAlertDue: jstHour >= NOT_RUN_ALERT_HOUR_JST,
+      currentMonth,
+      currentMonthSheetMissing: !currentSheet,
     }
   } catch (err) {
     // sheet_sync 系 migration 未適用でもダッシュボードを壊さない
@@ -312,7 +412,6 @@ export async function runSheetSync(
   })
 
   if (!config.enabled) return notStarted('スプレッドシート同期が無効になっています（設定画面で有効にしてください）')
-  if (!config.spreadsheetId) return notStarted('スプレッドシートIDが設定されていません')
 
   const runId = await startRun(db, trigger, range)
   if (!runId) return notStarted('別の同期が実行中です。終了してからもう一度お試しください')
@@ -331,21 +430,61 @@ export async function runSheetSync(
 
     const fetchTabs: SheetTabFetcher = options.fetchTabs
       ?? ((spreadsheetId, tabNames) => fetchSheetTabs(env.GOOGLE_SERVICE_ACCOUNT_JSON, spreadsheetId, tabNames))
-    const tabValues = await fetchTabs(config.spreadsheetId, sources.map((source) => source.tab_name))
+    const spreadsheetByMonth = new Map(
+      (await fetchMonthlySpreadsheets(db)).map((row) => [row.target_month, row.spreadsheet_id])
+    )
 
-    // 1タブの失敗が他のタブに影響しないよう、タブごとに完結させる
-    for (const source of sources) {
-      const result = await syncTab(db, source, tabValues.get(source.tab_name), range, config.minRowRatio)
+    const record = async (result: SheetSyncTabResult, source: SheetSyncSource) => {
       results.push(result)
       await saveTabResult(db, runId, result)
       logSyncInfo('tab finished', {
         runId,
+        month: result.target_month,
         source: sourceLabel(source),
         tab: result.tab_name,
         status: result.status,
         rows: result.row_count,
         reason: result.reason,
       })
+    }
+
+    // 月ごとに、その月に登録されたシートから読み、その月の範囲だけを置き換える。
+    // 1つの月・1つのタブの失敗が、他の月・他のタブに影響しないよう、それぞれで完結させる
+    for (const monthRange of splitRangeByMonth(range)) {
+      const spreadsheetId = spreadsheetByMonth.get(monthRange.month)
+      if (!spreadsheetId) {
+        for (const source of sources) {
+          await record({
+            ...baseTabResult(source, monthRange.month),
+            status: 'skipped',
+            reason: `${monthRange.month} のスプレッドシートが登録されていません（設定画面で登録してください）`,
+          }, source)
+        }
+        continue
+      }
+
+      let tabValues: SheetTabValues
+      try {
+        tabValues = await fetchTabs(spreadsheetId, sources.map((source) => source.tab_name), monthRange.month)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        logSyncError('spreadsheet fetch failed', { runId, month: monthRange.month, error: message })
+        for (const source of sources) {
+          await record({
+            ...baseTabResult(source, monthRange.month),
+            status: 'failed',
+            reason: `${monthRange.month} のスプレッドシートを読めませんでした：${message}`,
+          }, source)
+        }
+        continue
+      }
+
+      for (const source of sources) {
+        await record(
+          await syncTab(db, source, tabValues.get(source.tab_name), monthRange, config.minRowRatio),
+          source
+        )
+      }
     }
 
     const importedCount = results.filter((result) => result.status === 'imported').length

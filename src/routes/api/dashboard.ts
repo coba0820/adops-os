@@ -666,6 +666,14 @@ function buildAlerts(
     })
   }
   if (sheetSync) {
+    if (alertSettings.warn_sheet_sync_missing_sheet !== false && sheetSync.currentMonthSheetMissing) {
+      alerts.push({
+        level: 'warning',
+        title: 'スプレッドシート未登録',
+        detail: `${sheetSync.currentMonth} のスプレッドシートが登録されていないため、当月分を同期できません。設定画面で登録してください`,
+        route: 'settings',
+      })
+    }
     if (
       alertSettings.warn_sheet_sync_failed !== false &&
       (sheetSync.latestStatus === 'failed' || sheetSync.latestStatus === 'partial')

@@ -2,13 +2,25 @@ import { Hono } from 'hono'
 import type { ApiResponse, Bindings, UploadFileType } from '../../types'
 import { fetchAppSettings } from '../../lib/settings'
 import { parseUploadDataSource, parseUploadFileType, type CsvRows } from '../../lib/import-service'
-import { normalizeSheetValues, type SheetTabValues } from '../../lib/google-sheets'
+import {
+  extractSpreadsheetId,
+  fetchSpreadsheetOverview,
+  normalizeSheetValues,
+  type SheetTabValues,
+  type SpreadsheetOverview,
+} from '../../lib/google-sheets'
 import {
   SITE_SYNC_SOURCES,
+  TARGET_MONTH_PATTERN,
+  buildConnectionReport,
   computeSyncDateRange,
+  currentJstMonth,
+  fetchMonthlySpreadsheets,
   fetchSyncSources,
   getSheetSyncSettings,
   runSheetSync,
+  selectTargetSources,
+  splitRangeByMonth,
   type SheetTabFetcher,
 } from '../../lib/sheet-sync'
 
@@ -29,6 +41,7 @@ type TabResultRow = {
   id: number
   run_id: number
   source_id: number | null
+  target_month: string | null
   tab_name: string
   status: string
   row_count: number
@@ -50,7 +63,7 @@ function isTestMode(env: Bindings) {
 
 async function fetchTabResults(db: D1Database, runId: number) {
   const { results } = await db.prepare(
-    `SELECT r.id, r.run_id, r.source_id, r.tab_name, r.status, r.row_count,
+    `SELECT r.id, r.run_id, r.source_id, r.target_month, r.tab_name, r.status, r.row_count,
             r.date_from, r.date_to, r.reason, r.upload_history_id,
             s.source_type, s.data_source, s.media_id, m.media_name
      FROM sheet_sync_tab_results r
@@ -83,17 +96,30 @@ sheetSyncRoute.get('/status', async (c) => {
      ORDER BY id DESC
      LIMIT 1`
   ).first<RunRow>()
+  const syncRange = computeSyncDateRange(new Date(), config.monthsToSync)
+  const spreadsheets = await fetchMonthlySpreadsheets(c.env.DB)
 
   return c.json<ApiResponse<unknown>>({
     success: true,
     data: {
       enabled: config.enabled,
-      spreadsheet_id: config.spreadsheetId,
       months_to_sync: config.monthsToSync,
       min_row_ratio: config.minRowRatio,
       has_credentials: Boolean(c.env.GOOGLE_SERVICE_ACCOUNT_JSON),
       test_mode: isTestMode(c.env),
-      sync_range: computeSyncDateRange(new Date(), config.monthsToSync),
+      sync_range: syncRange,
+      current_month: currentJstMonth(),
+      // 同期対象の各月に、スプレッドシートが登録されているか
+      sync_months: splitRangeByMonth(syncRange).map((part) => {
+        const sheet = spreadsheets.find((row) => row.target_month === part.month)
+        return {
+          month: part.month,
+          from: part.from,
+          to: part.to,
+          registered: Boolean(sheet),
+          spreadsheet_url: sheet?.spreadsheet_url || null,
+        }
+      }),
       latest_run: latestRun ?? null,
       last_success_run: lastSuccess ?? null,
       tab_results: latestRun ? await fetchTabResults(c.env.DB, latestRun.id) : [],
@@ -146,16 +172,21 @@ sheetSyncRoute.get('/runs/:id', async (c) => {
 
 // ------------------------------------------------------------
 // POST /api/sheet-sync/run : 手動同期
-// SHEET_SYNC_TEST_MODE=true のときだけ、body.tabs でタブの中身を直接渡せる
+// SHEET_SYNC_TEST_MODE=true のときだけ、タブの中身を直接渡せる
+//   body.tabs_by_month : { 'YYYY-MM': { タブ名: 行データ } }（月ごとのシートの中身）
+//   body.tabs          : { タブ名: 行データ }（登録済みの全月で同じ中身を使う）
 // ------------------------------------------------------------
+type TestTabs = Record<string, CsvRows | null>
+
 sheetSyncRoute.post('/run', async (c) => {
   let fetchTabs: SheetTabFetcher | undefined
 
   if (isTestMode(c.env)) {
-    const body = await c.req.json<{ tabs?: Record<string, CsvRows | null> }>().catch(() => ({} as { tabs?: Record<string, CsvRows | null> }))
-    if (body.tabs) {
-      const tabs = body.tabs
-      fetchTabs = async (_spreadsheetId, tabNames) => {
+    const body = await c.req.json<{ tabs?: TestTabs; tabs_by_month?: Record<string, TestTabs> }>()
+      .catch(() => ({} as { tabs?: TestTabs; tabs_by_month?: Record<string, TestTabs> }))
+    if (body.tabs || body.tabs_by_month) {
+      fetchTabs = async (_spreadsheetId, tabNames, targetMonth) => {
+        const tabs = body.tabs_by_month ? (body.tabs_by_month[targetMonth] ?? {}) : (body.tabs ?? {})
         const values: SheetTabValues = new Map()
         tabNames.forEach((name) => {
           const rows = tabs[name]
@@ -292,4 +323,112 @@ sheetSyncRoute.put('/sources', async (c) => {
   if (statements.length > 0) await c.env.DB.batch(statements)
 
   return c.json<ApiResponse<{ updated: number }>>({ success: true, data: { updated: statements.length } })
+})
+
+// ------------------------------------------------------------
+// 月ごとのスプレッドシート
+// GET    /api/sheet-sync/spreadsheets        : 登録一覧（新しい月から）
+// PUT    /api/sheet-sync/spreadsheets        : 登録・更新 body: { target_month: 'YYYY-MM', url }
+// DELETE /api/sheet-sync/spreadsheets/:month : 登録の削除
+// POST   /api/sheet-sync/spreadsheets/test   : 接続テスト body: { url }
+// ------------------------------------------------------------
+sheetSyncRoute.get('/spreadsheets', async (c) => {
+  return c.json<ApiResponse<unknown>>({
+    success: true,
+    data: {
+      current_month: currentJstMonth(),
+      spreadsheets: await fetchMonthlySpreadsheets(c.env.DB),
+    },
+  })
+})
+
+function parseSpreadsheetInput(value: unknown) {
+  const url = String(value ?? '').trim()
+  const spreadsheetId = extractSpreadsheetId(url)
+  if (!spreadsheetId || !/^[a-zA-Z0-9_-]+$/.test(spreadsheetId)) return null
+  return { url, spreadsheetId }
+}
+
+sheetSyncRoute.put('/spreadsheets', async (c) => {
+  const body = await c.req.json<{ target_month?: string; url?: string }>().catch(() => ({} as { target_month?: string; url?: string }))
+  const targetMonth = String(body.target_month ?? '').trim()
+  if (!TARGET_MONTH_PATTERN.test(targetMonth)) {
+    return c.json<ApiResponse<null>>({ success: false, error: '対象月は YYYY-MM 形式で指定してください' }, 400)
+  }
+  const input = parseSpreadsheetInput(body.url)
+  if (!input) {
+    return c.json<ApiResponse<null>>({ success: false, error: 'スプレッドシートのURL（またはID）を入力してください' }, 400)
+  }
+
+  await c.env.DB.prepare(
+    `INSERT INTO sheet_sync_spreadsheets (target_month, spreadsheet_id, spreadsheet_url)
+     VALUES (?, ?, ?)
+     ON CONFLICT(target_month) DO UPDATE SET
+       spreadsheet_id = excluded.spreadsheet_id,
+       spreadsheet_url = excluded.spreadsheet_url,
+       updated_at = CURRENT_TIMESTAMP`
+  )
+    .bind(targetMonth, input.spreadsheetId, input.url)
+    .run()
+
+  return c.json<ApiResponse<{ target_month: string; spreadsheet_id: string }>>({
+    success: true,
+    data: { target_month: targetMonth, spreadsheet_id: input.spreadsheetId },
+  })
+})
+
+sheetSyncRoute.delete('/spreadsheets/:month', async (c) => {
+  const targetMonth = c.req.param('month')
+  if (!TARGET_MONTH_PATTERN.test(targetMonth)) {
+    return c.json<ApiResponse<null>>({ success: false, error: '対象月は YYYY-MM 形式で指定してください' }, 400)
+  }
+  const result = await c.env.DB.prepare('DELETE FROM sheet_sync_spreadsheets WHERE target_month = ?')
+    .bind(targetMonth)
+    .run()
+  return c.json<ApiResponse<{ deleted: number }>>({ success: true, data: { deleted: Number(result.meta?.changes ?? 0) } })
+})
+
+// 接続テスト：シートが読めるか、媒体マスタ・設定画面のタブ名がすべてあり1行目が入っているか
+// SHEET_SYNC_TEST_MODE=true のときだけ、body.sheet_titles / body.headers でシートの内容を直接渡せる
+sheetSyncRoute.post('/spreadsheets/test', async (c) => {
+  const body = await c.req.json<{
+    url?: string
+    sheet_titles?: string[]
+    headers?: Record<string, string[]>
+  }>().catch(() => ({} as { url?: string; sheet_titles?: string[]; headers?: Record<string, string[]> }))
+  const input = parseSpreadsheetInput(body.url)
+  if (!input) {
+    return c.json<ApiResponse<null>>({ success: false, error: 'スプレッドシートのURL（またはID）を入力してください' }, 400)
+  }
+
+  const settings = await fetchAppSettings(c.env.DB)
+  const sources = selectTargetSources(await fetchSyncSources(c.env.DB), settings)
+
+  let overview: SpreadsheetOverview
+  try {
+    overview = isTestMode(c.env) && Array.isArray(body.sheet_titles)
+      ? {
+        title: '(test)',
+        sheetTitles: body.sheet_titles,
+        headers: new Map(Object.entries(body.headers ?? {})),
+      }
+      : await fetchSpreadsheetOverview(
+        c.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+        input.spreadsheetId,
+        sources.map((source) => source.tab_name)
+      )
+  } catch (err) {
+    // 認証・権限・ID の誤りは「読めなかった」結果として返す（画面にそのまま表示する）
+    return c.json<ApiResponse<unknown>>({
+      success: true,
+      data: {
+        ok: false,
+        spreadsheet_title: '',
+        message: err instanceof Error ? err.message : String(err),
+        tabs: [],
+      },
+    })
+  }
+
+  return c.json<ApiResponse<unknown>>({ success: true, data: buildConnectionReport(sources, overview) })
 })

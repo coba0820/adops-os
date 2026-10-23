@@ -241,8 +241,23 @@ function renderSheetSyncStatus(status) {
         <div class="import-summary-value small">${status.has_credentials ? '設定済み' : '<span class="badge badge-danger">鍵が未登録</span>'}</div>
       </div>
     </div>
+    ${renderSheetSyncMonths(status.sync_months || [])}
     ${run?.error_message ? `<div class="sheet-sync-message">${escapeHtml(run.error_message)}</div>` : ''}
     ${renderSheetSyncTabResults(status.tab_results || [])}
+  `
+}
+
+function renderSheetSyncMonths(months) {
+  if (months.length === 0) return ''
+  return `
+    <div class="sheet-sync-months">
+      <span>対象月のスプレッドシート：</span>
+      ${months.map((item) => `
+        <span>${escapeHtml(item.month)} ${item.registered
+          ? '<span class="badge badge-active">登録済</span>'
+          : '<span class="badge badge-danger">未登録</span>'}</span>
+      `).join('')}
+    </div>
   `
 }
 
@@ -256,6 +271,7 @@ function renderSheetSyncTabResults(results) {
     const period = item.date_from ? `${escapeHtml(item.date_from)} 〜 ${escapeHtml(item.date_to)}` : '-'
     return `
       <tr>
+        <td>${escapeHtml(item.target_month || '-')}</td>
         <td>${target}</td>
         <td>${escapeHtml(item.tab_name)}</td>
         <td>${renderStatusBadge(SHEET_SYNC_TAB_STATUS, item.status)}</td>
@@ -271,6 +287,7 @@ function renderSheetSyncTabResults(results) {
       <table class="data-table">
         <thead>
           <tr>
+            <th>対象月</th>
             <th>対象</th>
             <th>タブ</th>
             <th>結果</th>
@@ -413,7 +430,7 @@ function renderUploadHistory(list) {
         <td><span class="badge badge-active">success</span></td>
         <td>${formatDateTime(item.uploaded_at)}</td>
         <td>
-          <button class="icon-btn danger" data-action="delete-upload" data-id="${item.id}" data-file-name="${escapeHtml(item.file_name)}" title="削除">
+          <button class="icon-btn danger" data-action="delete-upload" data-id="${item.id}" data-file-name="${escapeHtml(item.file_name)}" data-import-method="${escapeHtml(item.import_method || 'manual')}" data-uploaded-at="${escapeHtml(item.uploaded_at || '')}" title="削除">
             <i class="fa-solid fa-trash"></i>
           </button>
         </td>
@@ -450,7 +467,20 @@ function bindUploadHistoryEvents(root, container) {
       const fileName = btn.dataset.fileName || ''
       if (!id) return
 
-      const confirmed = window.confirm(`「${fileName}」の取込履歴と紐づく明細を削除します。よろしいですか？`)
+      const syncedAfter = btn.dataset.importMethod === 'manual'
+        && await hasSheetSyncAfter(btn.dataset.uploadedAt || '')
+      const message = syncedAfter
+        ? [
+          `「${fileName}」の取込履歴と紐づく明細を削除します。`,
+          '',
+          '【注意】この取込の後にスプレッドシート同期が実行されています。',
+          '同期で値が変わらなかった行は、この取込の明細として残っているため、',
+          '削除すると同期中のデータが消える可能性があります（次回の同期で再び取り込まれます）。',
+          '',
+          '削除してよろしいですか？',
+        ].join('\n')
+        : `「${fileName}」の取込履歴と紐づく明細を削除します。よろしいですか？`
+      const confirmed = window.confirm(message)
       if (!confirmed) return
 
       btn.disabled = true
@@ -466,6 +496,20 @@ function bindUploadHistoryEvents(root, container) {
       }
     })
   })
+}
+
+// 手動アップロードの後に、取り込みが行われた同期（成功・一部スキップ）があるか
+async function hasSheetSyncAfter(uploadedAt) {
+  if (!uploadedAt) return false
+  try {
+    const res = await axios.get('/api/sheet-sync/status')
+    const lastRun = res.data.data?.last_success_run
+    return Boolean(lastRun?.started_at && lastRun.started_at > uploadedAt)
+  } catch (err) {
+    // 確認できない場合は、念のため注意を出す
+    console.error(err)
+    return true
+  }
 }
 
 function renderImportStatusBadge(uploaded) {

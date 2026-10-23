@@ -23,6 +23,7 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
   { group: 'alerts', key: 'warn_missing_payment_report_csv', defaultValue: true, valueType: 'boolean', description: '決済レポートCSV未取込警告' },
   { group: 'alerts', key: 'warn_sheet_sync_failed', defaultValue: true, valueType: 'boolean', description: 'スプレッドシート同期の失敗警告' },
   { group: 'alerts', key: 'warn_sheet_sync_not_run', defaultValue: true, valueType: 'boolean', description: 'スプレッドシート同期の当日未実行警告' },
+  { group: 'alerts', key: 'warn_sheet_sync_missing_sheet', defaultValue: true, valueType: 'boolean', description: '当月のスプレッドシート未登録警告' },
   { group: 'alerts', key: 'warn_zero_revenue', defaultValue: false, valueType: 'boolean', description: '売上0件警告' },
   { group: 'alerts', key: 'warn_zero_payer', defaultValue: false, valueType: 'boolean', description: '入金者0件警告' },
   { group: 'alerts', key: 'warn_recovery_drop', defaultValue: false, valueType: 'boolean', description: '回収率低下警告' },
@@ -49,7 +50,6 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
   { group: 'import', key: 'enable_payment_report_csv', defaultValue: true, valueType: 'boolean', description: '決済レポートCSV取込を有効化' },
 
   { group: 'sheet_sync', key: 'enabled', defaultValue: false, valueType: 'boolean', description: 'スプレッドシート同期を有効化' },
-  { group: 'sheet_sync', key: 'spreadsheet_id', defaultValue: '', valueType: 'string', description: '読み込み用スプレッドシートID' },
   { group: 'sheet_sync', key: 'months_to_sync', defaultValue: 2, valueType: 'number', description: '同期する月数（当月を含む）', min: 1, max: 12 },
   { group: 'sheet_sync', key: 'min_row_ratio', defaultValue: 0.5, valueType: 'number', description: '置き換え前の行数に対する許容下限率', min: 0, max: 1 },
 ]

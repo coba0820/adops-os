@@ -148,6 +148,34 @@ export function normalizeSheetValues(values: unknown[][] | undefined): string[][
   return rows.map((row) => (row.length < width ? [...row, ...Array(width - row.length).fill('')] : row))
 }
 
+async function fetchSpreadsheetMeta(spreadsheetId: string, accessToken: string) {
+  const meta = await sheetsApiGet<{
+    properties?: { title?: string }
+    sheets?: Array<{ properties?: { title?: string } }>
+  }>(
+    `${SHEETS_API_BASE}/${encodeURIComponent(spreadsheetId)}?fields=properties.title,sheets.properties.title`,
+    accessToken
+  )
+  return {
+    title: meta.properties?.title ?? '',
+    sheetTitles: (meta.sheets ?? []).map((sheet) => sheet.properties?.title ?? ''),
+  }
+}
+
+async function batchGetValues(spreadsheetId: string, accessToken: string, ranges: string[]) {
+  const params = new URLSearchParams({
+    valueRenderOption: 'FORMATTED_VALUE',
+    majorDimension: 'ROWS',
+  })
+  ranges.forEach((range) => params.append('ranges', range))
+
+  const data = await sheetsApiGet<{ valueRanges?: Array<{ values?: unknown[][] }> }>(
+    `${SHEETS_API_BASE}/${encodeURIComponent(spreadsheetId)}/values:batchGet?${params.toString()}`,
+    accessToken
+  )
+  return ranges.map((_, index) => data.valueRanges?.[index]?.values)
+}
+
 export async function fetchSheetTabs(
   serviceAccountJson: string | undefined,
   spreadsheetId: string,
@@ -155,13 +183,7 @@ export async function fetchSheetTabs(
 ): Promise<SheetTabValues> {
   const account = parseServiceAccountJson(serviceAccountJson)
   const accessToken = await fetchAccessToken(account)
-  const id = encodeURIComponent(spreadsheetId)
-
-  const meta = await sheetsApiGet<{ sheets?: Array<{ properties?: { title?: string } }> }>(
-    `${SHEETS_API_BASE}/${id}?fields=sheets.properties.title`,
-    accessToken
-  )
-  const existingTitles = new Set((meta.sheets ?? []).map((sheet) => sheet.properties?.title ?? ''))
+  const existingTitles = new Set((await fetchSpreadsheetMeta(spreadsheetId, accessToken)).sheetTitles)
 
   const result: SheetTabValues = new Map()
   const targets = [...new Set(tabNames)].filter((name) => {
@@ -171,19 +193,38 @@ export async function fetchSheetTabs(
   })
   if (targets.length === 0) return result
 
-  const params = new URLSearchParams({
-    valueRenderOption: 'FORMATTED_VALUE',
-    majorDimension: 'ROWS',
-  })
-  targets.forEach((name) => params.append('ranges', quoteSheetName(name)))
-
-  const data = await sheetsApiGet<{ valueRanges?: Array<{ values?: unknown[][] }> }>(
-    `${SHEETS_API_BASE}/${id}/values:batchGet?${params.toString()}`,
-    accessToken
-  )
-
+  const values = await batchGetValues(spreadsheetId, accessToken, targets.map(quoteSheetName))
   targets.forEach((name, index) => {
-    result.set(name, normalizeSheetValues(data.valueRanges?.[index]?.values))
+    result.set(name, normalizeSheetValues(values[index]))
   })
   return result
+}
+
+// 接続テスト用：シート名・タブ一覧と、指定タブの1行目（ヘッダー）だけを読む
+export type SpreadsheetOverview = {
+  title: string
+  sheetTitles: string[]
+  headers: Map<string, string[]>
+}
+
+export async function fetchSpreadsheetOverview(
+  serviceAccountJson: string | undefined,
+  spreadsheetId: string,
+  tabNames: string[]
+): Promise<SpreadsheetOverview> {
+  const account = parseServiceAccountJson(serviceAccountJson)
+  const accessToken = await fetchAccessToken(account)
+  const meta = await fetchSpreadsheetMeta(spreadsheetId, accessToken)
+
+  const existing = new Set(meta.sheetTitles)
+  const targets = [...new Set(tabNames)].filter((name) => existing.has(name))
+  const headers = new Map<string, string[]>()
+  if (targets.length > 0) {
+    const values = await batchGetValues(spreadsheetId, accessToken, targets.map((name) => `${quoteSheetName(name)}!1:1`))
+    targets.forEach((name, index) => {
+      headers.set(name, (values[index]?.[0] ?? []).map((cell) => String(cell ?? '')))
+    })
+  }
+
+  return { title: meta.title, sheetTitles: meta.sheetTitles, headers }
 }
