@@ -77,7 +77,7 @@ export async function renderDataImportPage(container) {
         <div class="card-header">
           <div>
             <div class="card-title"><i class="fa-solid fa-table"></i>スプレッドシート同期</div>
-            <div class="card-subtitle">読み込み用スプレッドシートから毎朝自動で取り込みます。下の手動アップロードは予備としてそのまま使えます。</div>
+            <div class="card-subtitle">読み込み用スプレッドシートから毎日 12:00 に自動で取り込みます。下の手動アップロードは予備としてそのまま使えます。</div>
           </div>
           <button class="btn btn-primary btn-sm" id="sheet-sync-run-btn" disabled>
             <i class="fa-solid fa-rotate"></i> 今すぐ同期

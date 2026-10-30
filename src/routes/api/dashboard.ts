@@ -5,7 +5,7 @@
 import { Hono } from 'hono'
 import type { ApiResponse, Bindings, MediaStatus } from '../../types'
 import { fetchAppSettings } from '../../lib/settings'
-import { fetchSheetSyncAlertState } from '../../lib/sheet-sync'
+import { SCHEDULED_SYNC_HOUR_JST, fetchSheetSyncAlertState } from '../../lib/sheet-sync'
 
 export const dashboardRoute = new Hono<{ Bindings: Bindings }>()
 
@@ -689,7 +689,7 @@ function buildAlerts(
       alerts.push({
         level: 'warning',
         title: 'スプレッドシート同期未実行',
-        detail: '本日のスプレッドシート同期が実行されていません',
+        detail: `本日のスプレッドシート同期（${SCHEDULED_SYNC_HOUR_JST}:00 の定時実行）が実行されていません`,
         route: 'data-import',
       })
     }

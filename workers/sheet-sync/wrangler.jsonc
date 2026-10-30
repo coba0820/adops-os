@@ -13,10 +13,11 @@
       "database_id": "3a02bd00-7644-4046-9f80-d61fc9813ead"
     }
   ],
-  // 実行時刻（UTC）。"0 23 * * *" = 毎朝 JST 8:00
-  // 変更したら npm run worker:sheet-sync:deploy で反映する
+  // 実行時刻（UTC）。"0 3 * * *" = 毎日 JST 12:00
+  // 変更したら npm run worker:sheet-sync:deploy で反映し、
+  // src/lib/sheet-sync.ts の SCHEDULED_SYNC_HOUR_JST も合わせる（「同期未実行」警告の判定に使う）
   "triggers": {
-    "crons": ["0 23 * * *"]
+    "crons": ["0 3 * * *"]
   },
   "observability": {
     "enabled": true

@@ -354,8 +354,10 @@ export function buildConnectionReport(sources: SheetSyncSource[], overview: Spre
   }
 }
 
-// 定時実行（JST 8:00）より後、この時刻を過ぎても当日の同期がなければ警告する
-export const NOT_RUN_ALERT_HOUR_JST = 10
+// 定時実行の時刻（JST）。workers/sheet-sync/wrangler.jsonc の crons と合わせる
+export const SCHEDULED_SYNC_HOUR_JST = 12
+// 定時実行の2時間後を過ぎても当日の同期がなければ警告する
+export const NOT_RUN_ALERT_HOUR_JST = SCHEDULED_SYNC_HOUR_JST + 2
 
 export async function fetchSheetSyncAlertState(db: D1Database, settings: AppSettings, now = new Date()) {
   const config = getSheetSyncSettings(settings)

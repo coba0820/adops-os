@@ -66,7 +66,7 @@ const FIELD_GROUPS = [
     title: 'スプレッドシート同期',
     icon: 'fa-table',
     group: 'sheet_sync',
-    subtitle: '月ごとに登録した読み込み用スプレッドシートから毎朝自動で取り込みます。広告媒体のタブ名はマスタ管理の媒体ごとに設定します。',
+    subtitle: '月ごとに登録した読み込み用スプレッドシートから毎日 12:00 に自動で取り込みます。広告媒体のタブ名はマスタ管理の媒体ごとに設定します。',
     fields: [
       { key: 'enabled', label: '自動同期を有効にする', type: 'boolean' },
       { key: 'months_to_sync', label: '同期する月数（当月を含む）', type: 'number', suffix: 'か月', step: '1' },
